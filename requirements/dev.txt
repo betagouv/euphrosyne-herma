@@ -1,0 +1,6 @@
+-r base.txt
+
+black==25.1.0
+isort==6.0.1
+Nuitka==2.7.6
+pyinstaller==6.14.2

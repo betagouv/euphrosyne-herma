@@ -1,0 +1,76 @@
+name: Build Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/dev.txt
+
+      - name: Build Windows executable
+        run: |
+          pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --add-data "bin/*:bin" --windowed --icon assets/icon.ico data_upload/gui.py
+
+      - name: Create Windows ZIP
+        run: |
+          powershell Compress-Archive -Path "dist/Euphrosyne Herma" -DestinationPath "euphrosyne-herma-windows.zip"
+
+      - name: Upload Windows release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: euphrosyne-herma-windows.zip
+          asset_name: euphrosyne-herma-windows.zip
+          asset_content_type: application/zip
+
+  build-mac:
+    runs-on: macos-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/dev.txt
+
+      - name: Build Mac executable
+        run: |
+          pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --add-data "bin/*:bin" --windowed --icon assets/icon.icns data_upload/gui.py
+
+      - name: Create Mac ZIP
+        run: |
+          cd dist && zip -r ../euphrosyne-herma-mac.zip "Euphrosyne Herma.app"
+
+      - name: Upload Mac release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: euphrosyne-herma-mac.zip
+          asset_name: euphrosyne-herma-mac.zip
+          asset_content_type: application/zip
