@@ -1,5 +1,5 @@
 euphrosyne:
-  url: "https://euphrosyne.beta.gouv.fr"
+  url: "https://euphrosyne.incubateur.net"
 
 euphrosyne-tools:
   url: "https://euphrosyne-tools-api-staging.osc-fr1.scalingo.io"
