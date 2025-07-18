@@ -1,5 +1,5 @@
-import pathlib
 import sys
+import sentry_sdk
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QIcon
@@ -56,4 +56,8 @@ class ConverterGUI:
 
 
 if __name__ == "__main__":
+    sentry_sdk.init(
+        dsn="https://3ac110bc22bfbcdc13c37d73f5be45de@sentry.incubateur.net/253",
+        send_default_pii=True,
+    )
     ConverterGUI.start()
