@@ -26,9 +26,6 @@ jobs:
         run: |
           pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --windowed --icon assets/icon.ico data_upload/gui.py
 
-      - name: List files in dist directory
-        run: dir dist
-
       - name: Create Windows ZIP
         run: |
           python -c "import shutil; shutil.make_archive('euphrosyne-herma-windows', 'zip', 'dist', 'Euphrosyne Herma')"
