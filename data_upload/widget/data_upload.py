@@ -10,8 +10,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from data_upload.widget.text_edit_stream import TextEditStream
-
 from data_upload.app.azcopy import ProcessWorker
 from data_upload.config import Config
 from data_upload.euphro_tools import (
@@ -22,6 +20,7 @@ from data_upload.euphrosyne.auth import EuphrosyneAuth
 from data_upload.euphrosyne.project import Project, list_projects
 from data_upload.widget.data_location import DataLocationInputLayout
 from data_upload.widget.data_type import DataTypeCheckboxesLayout
+from data_upload.widget.text_edit_stream import TextEditStream
 
 
 class DataUploadWidget(QWidget):

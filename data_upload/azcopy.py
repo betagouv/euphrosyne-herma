@@ -6,7 +6,7 @@ from pathlib import Path
 
 import httpx
 
-from data_upload.utils import IS_BUNDLED, BUNDLE_DIR
+from data_upload.utils import BUNDLE_DIR, IS_BUNDLED
 
 if IS_BUNDLED:
     _bin_folder = BUNDLE_DIR / "bin"

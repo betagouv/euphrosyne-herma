@@ -1,6 +1,6 @@
 import sys
-import sentry_sdk
 
+import sentry_sdk
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
@@ -8,9 +8,9 @@ from PySide6.QtWidgets import QApplication
 from data_upload.app.init import init_access_token, init_azcopy
 from data_upload.app.login import login_user
 from data_upload.config import load_config
+from data_upload.utils import BUNDLE_DIR, IS_BUNDLED
 from data_upload.widget.data_upload import DataUploadWidget
 from data_upload.widget.text_edit_stream import TextEditStream
-from data_upload.utils import IS_BUNDLED, BUNDLE_DIR
 
 settings = QSettings("Euphrosyne", "Herma")
 
