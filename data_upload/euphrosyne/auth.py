@@ -15,6 +15,15 @@ class EuphrosyneConnectionError(Exception):
         )
 
 
+class EuphrosyneAuthenticationError(Exception):
+    """Raised when the user must authenticate again."""
+
+
+def clear_tokens(settings: QSettings):
+    settings.remove("access_token")
+    settings.remove("refresh_token")
+
+
 def is_token_expired(token: str) -> bool:
     """
     Check if the provided JWT is valid.
@@ -116,6 +125,21 @@ class EuphrosyneAuth(httpx.Auth):
     def update_tokens(self, response):
         # Update the `.access_token` and `.refresh_token` tokens
         # based on a refresh response.
-        data = response.json()
-        self.access_token = data["access"]
+        if response.status_code != 200:
+            raise EuphrosyneAuthenticationError("Session expired. Please log in again.")
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            raise EuphrosyneAuthenticationError(
+                "Authentication server returned an invalid response."
+            ) from e
+
+        access_token = data.get("access")
+        if not isinstance(access_token, str) or not access_token:
+            raise EuphrosyneAuthenticationError(
+                "Authentication server did not return an access token."
+            )
+
+        self.access_token = access_token
         self.settings.setValue("access_token", self.access_token)

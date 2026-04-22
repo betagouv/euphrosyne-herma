@@ -1,22 +1,33 @@
 from data_upload.widget import data_upload as data_upload_module
+from data_upload.euphrosyne.auth import EuphrosyneAuthenticationError
 from data_upload.widget.data_upload import DataUploadWidget
 
 
 class FakeSettings:
-    def value(self, key, default=None):
-        values = {
+    def __init__(self):
+        self.values = {
             "access_token": "access-token",
             "refresh_token": "refresh-token",
         }
-        return values.get(key, default)
+
+    def value(self, key, default=None):
+        return self.values.get(key, default)
+
+    def remove(self, key):
+        self.values.pop(key, None)
 
 
 class FakeMessageBox:
     critical_calls = []
+    warning_calls = []
 
     @classmethod
     def critical(cls, *args):
         cls.critical_calls.append(args)
+
+    @classmethod
+    def warning(cls, *args):
+        cls.warning_calls.append(args)
 
 
 CONFIG = {
@@ -31,6 +42,23 @@ def _widget(monkeypatch, projects):
     )
     widget = DataUploadWidget(config=CONFIG, settings=FakeSettings())
     return widget
+
+
+class FakeToolsService:
+    def __init__(self, init_error=None, sas_error=None):
+        self.init_error = init_error
+        self.sas_error = sas_error
+
+    def init_folders(self, project_name, run_name):
+        if self.init_error:
+            raise self.init_error
+
+    def get_run_data_upload_shared_access_signature(
+        self, project_name, run_name, data_type
+    ):
+        if self.sas_error:
+            raise self.sas_error
+        return {"url": "https://storage.example/share", "token": "sas-token"}
 
 
 def test_empty_project_list_does_not_crash_and_keeps_start_disabled(qapp, monkeypatch):
@@ -88,6 +116,72 @@ def test_upload_completion_failure_appends_error_shows_dialog_and_reenables_star
             "Upload failed",
             expected_message,
         )
+    finally:
+        widget.close()
+
+
+def test_auth_failure_during_folder_init_clears_tokens_prompts_login_and_stops(
+    qapp, monkeypatch
+):
+    FakeMessageBox.warning_calls = []
+    login_calls = []
+    monkeypatch.setattr(data_upload_module, "QMessageBox", FakeMessageBox)
+    monkeypatch.setattr(
+        data_upload_module,
+        "login_user",
+        lambda config, settings: login_calls.append((config, settings)),
+    )
+    widget = _widget(
+        monkeypatch,
+        [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],
+    )
+    try:
+        widget.tools_service = FakeToolsService(
+            init_error=EuphrosyneAuthenticationError("Session expired.")
+        )
+        widget.start_button.setDisabled(True)
+
+        widget.on_start()
+
+        assert widget.settings.values == {}
+        assert login_calls == [(CONFIG, widget.settings)]
+        assert len(FakeMessageBox.warning_calls) == 1
+        assert FakeMessageBox.warning_calls[0][1] == "Session expired"
+        assert "Please retry the upload." in widget.context_box.toPlainText()
+        assert widget.start_button.isEnabled() is True
+    finally:
+        widget.close()
+
+
+def test_auth_failure_during_sas_request_clears_tokens_prompts_login_and_stops(
+    qapp, monkeypatch
+):
+    FakeMessageBox.warning_calls = []
+    login_calls = []
+    monkeypatch.setattr(data_upload_module, "QMessageBox", FakeMessageBox)
+    monkeypatch.setattr(
+        data_upload_module,
+        "login_user",
+        lambda config, settings: login_calls.append((config, settings)),
+    )
+    widget = _widget(
+        monkeypatch,
+        [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],
+    )
+    try:
+        widget.tools_service = FakeToolsService(
+            sas_error=EuphrosyneAuthenticationError("Session expired.")
+        )
+        widget.start_button.setDisabled(True)
+
+        widget.on_start()
+
+        assert widget.settings.values == {}
+        assert login_calls == [(CONFIG, widget.settings)]
+        assert len(FakeMessageBox.warning_calls) == 1
+        assert FakeMessageBox.warning_calls[0][1] == "Session expired"
+        assert "Please retry the upload." in widget.context_box.toPlainText()
+        assert widget.start_button.isEnabled() is True
     finally:
         widget.close()
 

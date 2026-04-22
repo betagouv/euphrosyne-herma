@@ -7,7 +7,9 @@ import pytest
 
 from data_upload.euphrosyne.auth import (
     EuphrosyneAuth,
+    EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
+    clear_tokens,
     euphrosyne_login,
     is_token_expired,
     refresh_token,
@@ -20,6 +22,9 @@ class FakeSettings:
 
     def setValue(self, key, value):
         self.values[key] = value
+
+    def remove(self, key):
+        self.values.pop(key, None)
 
 
 def _jwt_with_payload(payload: dict) -> str:
@@ -154,6 +159,31 @@ def test_auth_flow_refreshes_after_unauthorized_response():
     assert retry_request.headers["Authorization"] == "Bearer new-access-token"
 
 
+def test_auth_flow_raises_when_refresh_response_fails():
+    settings = FakeSettings()
+    auth = EuphrosyneAuth(
+        access_token="old-access-token",
+        refresh_token="refresh-token",
+        host="https://euphrosyne.example",
+        settings=settings,
+    )
+    original_request = httpx.Request("GET", "https://tools.example/data")
+
+    flow = auth.auth_flow(original_request)
+    first_request = next(flow)
+    refresh_request = flow.send(httpx.Response(401, request=first_request))
+
+    with pytest.raises(EuphrosyneAuthenticationError, match="Session expired"):
+        flow.send(
+            httpx.Response(
+                401, json={"detail": "token_not_valid"}, request=refresh_request
+            )
+        )
+
+    assert auth.access_token == "old-access-token"
+    assert settings.values == {}
+
+
 def test_update_tokens_stores_new_access_token():
     settings = FakeSettings()
     auth = EuphrosyneAuth(
@@ -167,3 +197,53 @@ def test_update_tokens_stores_new_access_token():
 
     assert auth.access_token == "new-access-token"
     assert settings.values == {"access_token": "new-access-token"}
+
+
+@pytest.mark.parametrize(
+    "response, message",
+    [
+        (
+            httpx.Response(401, json={"detail": "token_not_valid"}),
+            "Session expired",
+        ),
+        (
+            httpx.Response(200, text="not json"),
+            "invalid response",
+        ),
+        (
+            httpx.Response(200, json={}),
+            "did not return an access token",
+        ),
+        (
+            httpx.Response(200, json={"access": None}),
+            "did not return an access token",
+        ),
+    ],
+)
+def test_update_tokens_rejects_failed_or_malformed_refresh_responses(response, message):
+    settings = FakeSettings()
+    auth = EuphrosyneAuth(
+        access_token="old-access-token",
+        refresh_token="refresh-token",
+        host="https://euphrosyne.example",
+        settings=settings,
+    )
+
+    with pytest.raises(EuphrosyneAuthenticationError, match=message):
+        auth.update_tokens(response)
+
+    assert auth.access_token == "old-access-token"
+    assert settings.values == {}
+
+
+def test_clear_tokens_removes_access_and_refresh_tokens():
+    settings = FakeSettings()
+    settings.values = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "other": "kept",
+    }
+
+    clear_tokens(settings)
+
+    assert settings.values == {"other": "kept"}

@@ -11,12 +11,17 @@ from PySide6.QtWidgets import (
 )
 
 from data_upload.app.azcopy import ProcessWorker
+from data_upload.app.login import login_user
 from data_upload.config import Config
 from data_upload.euphro_tools import (
     EuphrosyneToolsConnectionError,
     EuphrosyneToolsService,
 )
-from data_upload.euphrosyne.auth import EuphrosyneAuth
+from data_upload.euphrosyne.auth import (
+    EuphrosyneAuth,
+    EuphrosyneAuthenticationError,
+    clear_tokens,
+)
 from data_upload.euphrosyne.project import (
     Project,
     first_project_with_runs,
@@ -42,6 +47,7 @@ class DataUploadWidget(QWidget):
     ):
         super().__init__()
         self.config = config
+        self.settings = settings
 
         self.context_box = QTextEdit()
         self.context_box.setReadOnly(True)
@@ -150,6 +156,9 @@ class DataUploadWidget(QWidget):
                 self.selectedProject,
                 self.selectedRun,
             )
+        except EuphrosyneAuthenticationError as e:
+            self._handle_authentication_error(e)
+            return
         except EuphrosyneToolsConnectionError as e:
             QMessageBox.critical(
                 self,
@@ -173,6 +182,9 @@ class DataUploadWidget(QWidget):
                     data_type=self.data_type_box.selected_data_type.name.lower(),
                 )
             )
+        except EuphrosyneAuthenticationError as e:
+            self._handle_authentication_error(e)
+            return
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -186,6 +198,17 @@ class DataUploadWidget(QWidget):
             dest=credentials["url"],
             sas_token=credentials["token"],
         )
+
+    def _handle_authentication_error(self, error: EuphrosyneAuthenticationError):
+        clear_tokens(self.settings)
+        QMessageBox.warning(
+            self,
+            "Session expired",
+            f"{error} Please log in again.",
+        )
+        login_user(self.config, self.settings)
+        self.start_button.setDisabled(False)
+        self.context_box.append("Please retry the upload.")
 
     @Slot(int)
     def on_data_upload_completed(self, return_code: int):
