@@ -236,6 +236,32 @@ def test_project_without_runs_does_not_crash_and_keeps_start_disabled(
         widget.close()
 
 
+def test_typed_existing_data_folder_enables_start(qapp, monkeypatch, tmp_path):
+    widget = _widget(
+        monkeypatch,
+        [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],
+    )
+    try:
+        widget.data_folder_input_layout.data_path_box.setText(str(tmp_path))
+
+        assert widget.start_button.isEnabled() is True
+    finally:
+        widget.close()
+
+
+def test_typed_missing_data_folder_keeps_start_disabled(qapp, monkeypatch, tmp_path):
+    widget = _widget(
+        monkeypatch,
+        [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],
+    )
+    try:
+        widget.data_folder_input_layout.data_path_box.setText(str(tmp_path / "missing"))
+
+        assert widget.start_button.isEnabled() is False
+    finally:
+        widget.close()
+
+
 def test_first_project_with_runs_is_selected_initially(qapp, monkeypatch):
     widget = _widget(
         monkeypatch,

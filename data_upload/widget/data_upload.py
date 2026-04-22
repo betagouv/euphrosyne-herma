@@ -146,7 +146,9 @@ class DataUploadWidget(QWidget):
         vlayout.addWidget(self.data_type_box)
         vlayout.addSpacing(12)
         self.data_folder_input_layout = DataLocationInputLayout()
-        self.data_folder_input_layout.folder_selected.connect(self._validate_form)
+        self.data_folder_input_layout.data_path_box.textChanged.connect(
+            lambda _text: self._validate_form()
+        )
         vlayout.addLayout(self.data_folder_input_layout)
         vlayout.addLayout(buttonslayout)
         vlayout.addWidget(self.context_box)
@@ -285,7 +287,7 @@ class DataUploadWidget(QWidget):
         if (
             self.selectedProject
             and self.selectedRun
-            and self.data_folder_input_layout.selected_folder
+            and self.data_folder_input_layout.has_valid_data_folder
             and self.data_type_box.selected_data_type
         ):
             self.start_button.setDisabled(False)
