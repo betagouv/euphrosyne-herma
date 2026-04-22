@@ -8,6 +8,7 @@ from data_upload.config import Config
 from data_upload.euphrosyne.auth import (
     EuphrosyneConnectionError,
     is_token_expired,
+    load_refresh_token,
     refresh_token,
 )
 
@@ -34,7 +35,7 @@ def init_access_token(settings: QSettings, config: Config):
     If not, it will download AzCopy.
     """
     access = settings.value("access_token", None)
-    refresh = settings.value("refresh_token", None)
+    refresh = load_refresh_token(settings)
 
     login_required = False
 

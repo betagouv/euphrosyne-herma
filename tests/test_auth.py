@@ -6,13 +6,17 @@ import httpx
 import pytest
 
 from data_upload.euphrosyne.auth import (
+    KEYRING_REFRESH_TOKEN_ACCOUNT,
+    KEYRING_SERVICE,
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
     clear_tokens,
     euphrosyne_login,
     is_token_expired,
+    load_refresh_token,
     refresh_token,
+    save_refresh_token,
 )
 
 
@@ -22,6 +26,9 @@ class FakeSettings:
 
     def setValue(self, key, value):
         self.values[key] = value
+
+    def value(self, key, default=None):
+        return self.values.get(key, default)
 
     def remove(self, key):
         self.values.pop(key, None)
@@ -247,3 +254,163 @@ def test_clear_tokens_removes_access_and_refresh_tokens():
     clear_tokens(settings)
 
     assert settings.values == {"other": "kept"}
+
+
+def test_save_refresh_token_uses_keyring_and_removes_legacy_settings_token(monkeypatch):
+    settings = FakeSettings()
+    settings.values = {"refresh_token": "legacy-refresh-token"}
+    set_password_calls = []
+
+    def fake_set_password(service, account, token):
+        set_password_calls.append((service, account, token))
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.set_password", fake_set_password
+    )
+
+    save_refresh_token(settings, "refresh-token")
+
+    assert set_password_calls == [
+        (KEYRING_SERVICE, KEYRING_REFRESH_TOKEN_ACCOUNT, "refresh-token")
+    ]
+    assert settings.values == {}
+
+
+def test_save_refresh_token_falls_back_to_settings_and_warns_sentry(monkeypatch):
+    settings = FakeSettings()
+    sentry_calls = []
+
+    def failing_set_password(service, account, token):
+        raise RuntimeError("keyring unavailable")
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.set_password", failing_set_password
+    )
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.sentry_sdk.capture_message",
+        lambda *args, **kwargs: sentry_calls.append((args, kwargs)),
+    )
+
+    save_refresh_token(settings, "refresh-token")
+
+    assert settings.values == {"refresh_token": "refresh-token"}
+    assert sentry_calls == [
+        (
+            ("Refresh token keyring save failed: RuntimeError",),
+            {"level": "warning"},
+        )
+    ]
+
+
+def test_load_refresh_token_uses_keyring(monkeypatch):
+    settings = FakeSettings()
+    settings.values = {"refresh_token": "legacy-refresh-token"}
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.get_password",
+        lambda service, account: "keyring-refresh-token",
+    )
+
+    assert load_refresh_token(settings) == "keyring-refresh-token"
+
+
+def test_load_refresh_token_falls_back_to_legacy_settings_without_warning_when_keyring_is_empty(
+    monkeypatch,
+):
+    settings = FakeSettings()
+    settings.values = {"refresh_token": "legacy-refresh-token"}
+    sentry_calls = []
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.get_password",
+        lambda service, account: None,
+    )
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.sentry_sdk.capture_message",
+        lambda *args, **kwargs: sentry_calls.append((args, kwargs)),
+    )
+
+    assert load_refresh_token(settings) == "legacy-refresh-token"
+    assert sentry_calls == []
+
+
+def test_load_refresh_token_falls_back_to_settings_and_warns_sentry(monkeypatch):
+    settings = FakeSettings()
+    settings.values = {"refresh_token": "legacy-refresh-token"}
+    sentry_calls = []
+
+    def failing_get_password(service, account):
+        raise RuntimeError("keyring unavailable")
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.get_password", failing_get_password
+    )
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.sentry_sdk.capture_message",
+        lambda *args, **kwargs: sentry_calls.append((args, kwargs)),
+    )
+
+    assert load_refresh_token(settings) == "legacy-refresh-token"
+    assert sentry_calls == [
+        (
+            ("Refresh token keyring load failed: RuntimeError",),
+            {"level": "warning"},
+        )
+    ]
+
+
+def test_clear_tokens_deletes_keyring_token_and_settings_tokens(monkeypatch):
+    settings = FakeSettings()
+    settings.values = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "other": "kept",
+    }
+    delete_calls = []
+
+    def fake_delete_password(service, account):
+        delete_calls.append((service, account))
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.delete_password",
+        fake_delete_password,
+    )
+
+    clear_tokens(settings)
+
+    assert delete_calls == [(KEYRING_SERVICE, KEYRING_REFRESH_TOKEN_ACCOUNT)]
+    assert settings.values == {"other": "kept"}
+
+
+def test_clear_tokens_removes_settings_tokens_and_warns_when_keyring_delete_fails(
+    monkeypatch,
+):
+    settings = FakeSettings()
+    settings.values = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "other": "kept",
+    }
+    sentry_calls = []
+
+    def failing_delete_password(service, account):
+        raise RuntimeError("keyring unavailable")
+
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.keyring.delete_password",
+        failing_delete_password,
+    )
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.sentry_sdk.capture_message",
+        lambda *args, **kwargs: sentry_calls.append((args, kwargs)),
+    )
+
+    clear_tokens(settings)
+
+    assert settings.values == {"other": "kept"}
+    assert sentry_calls == [
+        (
+            ("Refresh token keyring delete failed: RuntimeError",),
+            {"level": "warning"},
+        )
+    ]

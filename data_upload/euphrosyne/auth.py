@@ -3,7 +3,12 @@ import json
 from datetime import datetime, timezone
 
 import httpx
+import keyring
+import sentry_sdk
 from PySide6.QtCore import QSettings
+
+KEYRING_SERVICE = "Euphrosyne Herma"
+KEYRING_REFRESH_TOKEN_ACCOUNT = "refresh_token"
 
 
 class EuphrosyneConnectionError(Exception):
@@ -19,7 +24,46 @@ class EuphrosyneAuthenticationError(Exception):
     """Raised when the user must authenticate again."""
 
 
+def _capture_keyring_warning(operation: str, error: Exception):
+    sentry_sdk.capture_message(
+        f"Refresh token keyring {operation} failed: {type(error).__name__}",
+        level="warning",
+    )
+
+
+def save_refresh_token(settings: QSettings, refresh_token: str):
+    try:
+        keyring.set_password(
+            KEYRING_SERVICE,
+            KEYRING_REFRESH_TOKEN_ACCOUNT,
+            refresh_token,
+        )
+        settings.remove("refresh_token")
+    except Exception as e:
+        _capture_keyring_warning("save", e)
+        settings.setValue("refresh_token", refresh_token)
+
+
+def load_refresh_token(settings: QSettings) -> str | None:
+    try:
+        token = keyring.get_password(
+            KEYRING_SERVICE,
+            KEYRING_REFRESH_TOKEN_ACCOUNT,
+        )
+    except Exception as e:
+        _capture_keyring_warning("load", e)
+        return settings.value("refresh_token", None)
+
+    return token or settings.value("refresh_token", None)
+
+
 def clear_tokens(settings: QSettings):
+    try:
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_REFRESH_TOKEN_ACCOUNT)
+    except keyring.errors.PasswordDeleteError:
+        pass
+    except Exception as e:
+        _capture_keyring_warning("delete", e)
     settings.remove("access_token")
     settings.remove("refresh_token")
 

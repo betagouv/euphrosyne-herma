@@ -7,8 +7,6 @@ Configuration is YAML plus environment override for `EUPHROSYNE_URL`. Tokens liv
 
 **Findings**
 
-- High: Auth refresh failure is brittle. On a `401`, `EuphrosyneAuth` refreshes and immediately calls `response.json()` / `data["access"]` without checking the refresh response status: [data_upload/euphrosyne/auth.py](/Users/witold/dev/euphrosyne-toolkit/data-upload/data_upload/euphrosyne/auth.py:99), [data_upload/euphrosyne/auth.py](/Users/witold/dev/euphrosyne-toolkit/data-upload/data_upload/euphrosyne/auth.py:116). An expired refresh token or server error will likely crash the request path instead of returning the user to login.
-
 - Medium: Refresh tokens are stored directly in `QSettings`: [data_upload/app/login.py](/Users/witold/dev/euphrosyne-toolkit/data-upload/data_upload/app/login.py:20). That is usually plaintext or lightly encoded platform storage, not a credential vault. For long-lived tokens, consider OS keychain storage or at least reducing token lifetime and adding an explicit logout/clear-token path.
 
 - Medium: Users can type or paste a folder path, but the form validation only trusts `selected_folder`, which is set only by the file dialog: [data_upload/widget/data_location.py](/Users/witold/dev/euphrosyne-toolkit/data-upload/data_upload/widget/data_location.py:30), [data_upload/widget/data_upload.py](/Users/witold/dev/euphrosyne-toolkit/data-upload/data_upload/widget/data_upload.py:207). A valid typed path will not enable Start.

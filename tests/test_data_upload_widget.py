@@ -40,6 +40,9 @@ def _widget(monkeypatch, projects):
     monkeypatch.setattr(
         data_upload_module, "list_projects", lambda host, access_token: projects
     )
+    monkeypatch.setattr(
+        data_upload_module, "load_refresh_token", lambda settings: "refresh-token"
+    )
     widget = DataUploadWidget(config=CONFIG, settings=FakeSettings())
     return widget
 
@@ -118,6 +121,36 @@ def test_upload_completion_failure_appends_error_shows_dialog_and_reenables_star
         )
     finally:
         widget.close()
+
+
+def test_logout_clears_tokens_appends_message_and_closes_window(qapp, monkeypatch):
+    cleared_settings = []
+
+    def fake_clear_tokens(settings):
+        cleared_settings.append(settings)
+        settings.remove("access_token")
+        settings.remove("refresh_token")
+
+    monkeypatch.setattr(data_upload_module, "clear_tokens", fake_clear_tokens)
+    widget = _widget(
+        monkeypatch,
+        [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],
+    )
+    widget.show()
+
+    topbarlayout = widget.layout().itemAt(0).layout()
+    assert topbarlayout.itemAt(1).widget() is widget.logout_button
+    assert widget.logout_button.styleSheet() == "color: #b00020;"
+
+    widget.on_logout()
+
+    assert cleared_settings == [widget.settings]
+    assert widget.settings.values == {}
+    assert (
+        "Logged out. Please restart the application to log in again."
+        in widget.context_box.toPlainText()
+    )
+    assert widget.isVisible() is False
 
 
 def test_auth_failure_during_folder_init_clears_tokens_prompts_login_and_stops(

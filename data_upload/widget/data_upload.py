@@ -21,6 +21,7 @@ from data_upload.euphrosyne.auth import (
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     clear_tokens,
+    load_refresh_token,
 )
 from data_upload.euphrosyne.project import (
     Project,
@@ -66,7 +67,7 @@ class DataUploadWidget(QWidget):
             host=self.config["euphrosyne-tools"]["url"],
             auth=EuphrosyneAuth(
                 access_token=settings.value("access_token"),
-                refresh_token=settings.value("refresh_token"),
+                refresh_token=load_refresh_token(settings),
                 host=self.config["euphrosyne"]["url"],
                 settings=settings,
             ),
@@ -88,6 +89,8 @@ class DataUploadWidget(QWidget):
 
         self.start_button = QPushButton("Start")
         self.start_button.setDisabled(True)
+        self.logout_button = QPushButton("Logout")
+        self.logout_button.setStyleSheet("color: #b00020;")
 
         def _generate_q_combo_box(items: list[str], placeholder: str):
             combo_box = QComboBox()
@@ -122,6 +125,11 @@ class DataUploadWidget(QWidget):
         data_type_label = QLabel("Data type")
         data_type_label.setBuddy(self.data_type_box)
 
+        # top bar layout
+        topbarlayout = QHBoxLayout()
+        topbarlayout.addStretch()
+        topbarlayout.addWidget(self.logout_button)
+
         # buttons bar layout
         buttonslayout = QHBoxLayout()
         buttonslayout.addStretch()
@@ -129,6 +137,7 @@ class DataUploadWidget(QWidget):
 
         # main layout
         vlayout = QVBoxLayout(self)
+        vlayout.addLayout(topbarlayout)
         vlayout.addWidget(project_label)
         vlayout.addWidget(self.project_select_box)
         vlayout.addWidget(run_label)
@@ -145,7 +154,16 @@ class DataUploadWidget(QWidget):
         self.resize(600, 300)
 
         self.start_button.clicked.connect(self.on_start)
+        self.logout_button.clicked.connect(self.on_logout)
         self.start_button.setDisabled(True)
+
+    @Slot()
+    def on_logout(self):
+        clear_tokens(self.settings)
+        self.context_box.append(
+            "Logged out. Please restart the application to log in again."
+        )
+        self.close()
 
     @Slot()
     def on_start(self):

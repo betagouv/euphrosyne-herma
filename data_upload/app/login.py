@@ -4,7 +4,7 @@ from PySide6 import QtWidgets
 from PySide6.QtCore import QSettings
 
 from data_upload.config import Config
-from data_upload.euphrosyne.auth import euphrosyne_login
+from data_upload.euphrosyne.auth import euphrosyne_login, save_refresh_token
 from data_upload.widget.login import LoginDialog
 
 
@@ -18,7 +18,7 @@ def login_user(config: Config, settings: QSettings):
         )
         if tokens is not None:
             settings.setValue("access_token", tokens[0])
-            settings.setValue("refresh_token", tokens[1])
+            save_refresh_token(settings, tokens[1])
         else:
             QtWidgets.QMessageBox.critical(
                 None,
