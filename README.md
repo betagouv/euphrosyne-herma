@@ -105,6 +105,9 @@ make format
 # Check code style
 make style
 
+# Run unit tests
+python -m pytest
+
 # Build standalone executable
 make nuitka
 ```
