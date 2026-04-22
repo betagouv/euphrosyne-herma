@@ -47,10 +47,10 @@ pip install -r requirements/dev.txt
 Launch the Euphrosyne Herma application:
 
 ```bash
-python data_upload/gui.py
+python -m data_upload.main
 ```
 
-Or using the module:
+You can also launch the GUI module directly:
 
 ```bash
 python -m data_upload.gui
@@ -71,6 +71,33 @@ The application provides widgets for:
 - **Data Location**: Browse and select data files/folders
 - **Data Type Selection**: Choose the type of data to upload
 - **Upload Progress**: Monitor upload status and logs
+
+### Command Line Upload
+
+The same upload flow can be run from a terminal by passing upload arguments to
+`data_upload.main`:
+
+```bash
+python -m data_upload.main \
+  --project "Project A" \
+  --run "Run 1" \
+  --data-type raw-data \
+  --data-path /path/to/data \
+  --email user@example.com
+```
+
+Supported data types are:
+
+- `raw-data`
+- `processed-data`
+
+`--data-path` must point to an existing local directory. If `--email` is omitted,
+the CLI prompts for it. The password is always entered through a hidden prompt and
+is never accepted as a command-line argument.
+
+The CLI logs in with the provided credentials, stores refreshed tokens using the
+same Qt settings/keyring helpers as the GUI, initializes the project/run folders,
+fetches the upload SAS token, and runs AzCopy synchronously.
 
 ## Configuration
 
@@ -145,10 +172,10 @@ data-upload/
 │   │   ├── data_upload.py    # Main upload widget
 │   │   ├── login.py          # Login dialog
 │   │   └── text_edit_stream.py # Output stream widget
+│   ├── cli.py            # Command-line upload entry point
 │   ├── config.py         # Configuration management
-│   ├── data_upload.py    # Core upload functionality
 │   ├── gui.py            # Main GUI entry point
-│   └── main.py           # (Legacy - use gui.py)
+│   └── main.py           # GUI/CLI dispatcher entry point
 ├── requirements/         # Dependency files
 │   ├── base.txt          # Runtime dependencies
 │   └── dev.txt           # Development dependencies
