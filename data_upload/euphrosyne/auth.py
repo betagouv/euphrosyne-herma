@@ -3,7 +3,12 @@ import json
 from datetime import datetime, timezone
 
 import httpx
+import keyring
+import sentry_sdk
 from PySide6.QtCore import QSettings
+
+KEYRING_SERVICE = "Euphrosyne Herma"
+KEYRING_REFRESH_TOKEN_ACCOUNT = "refresh_token"
 
 
 class EuphrosyneConnectionError(Exception):
@@ -13,6 +18,54 @@ class EuphrosyneConnectionError(Exception):
         super().__init__(
             "Failed to connect to Euphrosyne server. Please check your connection and try again."
         )
+
+
+class EuphrosyneAuthenticationError(Exception):
+    """Raised when the user must authenticate again."""
+
+
+def _capture_keyring_warning(operation: str, error: Exception):
+    sentry_sdk.capture_message(
+        f"Refresh token keyring {operation} failed: {type(error).__name__}",
+        level="warning",
+    )
+
+
+def save_refresh_token(settings: QSettings, refresh_token: str):
+    try:
+        keyring.set_password(
+            KEYRING_SERVICE,
+            KEYRING_REFRESH_TOKEN_ACCOUNT,
+            refresh_token,
+        )
+        settings.remove("refresh_token")
+    except Exception as e:
+        _capture_keyring_warning("save", e)
+        settings.setValue("refresh_token", refresh_token)
+
+
+def load_refresh_token(settings: QSettings) -> str | None:
+    try:
+        token = keyring.get_password(
+            KEYRING_SERVICE,
+            KEYRING_REFRESH_TOKEN_ACCOUNT,
+        )
+    except Exception as e:
+        _capture_keyring_warning("load", e)
+        return settings.value("refresh_token", None)
+
+    return token or settings.value("refresh_token", None)
+
+
+def clear_tokens(settings: QSettings):
+    try:
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_REFRESH_TOKEN_ACCOUNT)
+    except keyring.errors.PasswordDeleteError:
+        pass
+    except Exception as e:
+        _capture_keyring_warning("delete", e)
+    settings.remove("access_token")
+    settings.remove("refresh_token")
 
 
 def is_token_expired(token: str) -> bool:
@@ -116,6 +169,21 @@ class EuphrosyneAuth(httpx.Auth):
     def update_tokens(self, response):
         # Update the `.access_token` and `.refresh_token` tokens
         # based on a refresh response.
-        data = response.json()
-        self.access_token = data["access"]
+        if response.status_code != 200:
+            raise EuphrosyneAuthenticationError("Session expired. Please log in again.")
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            raise EuphrosyneAuthenticationError(
+                "Authentication server returned an invalid response."
+            ) from e
+
+        access_token = data.get("access")
+        if not isinstance(access_token, str) or not access_token:
+            raise EuphrosyneAuthenticationError(
+                "Authentication server did not return an access token."
+            )
+
+        self.access_token = access_token
         self.settings.setValue("access_token", self.access_token)

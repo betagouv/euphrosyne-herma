@@ -1,18 +1,30 @@
-init:
-	poetry install
-	$(MAKE) build_rs
+PYTHON ?= $(shell if [ -x venv/bin/python ]; then printf 'venv/bin/python'; else printf 'python3'; fi)
+PYINSTALLER ?= pyinstaller
+
+.PHONY: install install-dev run format style test build-windows build-mac
+
+install:
+	$(PYTHON) -m pip install -r requirements/base.txt
+
+install-dev:
+	$(PYTHON) -m pip install -r requirements/dev.txt
 
 run:
-	poetry run python new_aglae_data_converter/gui.py
+	$(PYTHON) -m data_upload.main
 
 format:
-	poetry run black .
+	$(PYTHON) -m isort . --profile black
+	$(PYTHON) -m black .
 
 style:
-	poetry run black . --check
+	$(PYTHON) -m isort . --profile black --check-only
+	$(PYTHON) -m black . --check
 
-build_rs:
-	poetry run maturin develop --release
+test:
+	$(PYTHON) -m pytest
 
-nuitka:
-	poetry run nuitka3 --standalone --onefile --assume-yes-for-downloads --enable-plugin=pyside6 --include-package=PyMca5 --include-data-files=config.yml=config.yml --clang new_aglae_data_converter/main.py --output-filename=converter --remove-output
+build-windows:
+	$(PYINSTALLER) --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --windowed --icon assets/icon.ico data_upload/gui.py
+
+build-mac:
+	$(PYINSTALLER) --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --windowed --icon assets/icon.icns data_upload/gui.py

@@ -11,13 +11,23 @@ from PySide6.QtWidgets import (
 )
 
 from data_upload.app.azcopy import ProcessWorker
+from data_upload.app.login import login_user
 from data_upload.config import Config
 from data_upload.euphro_tools import (
     EuphrosyneToolsConnectionError,
     EuphrosyneToolsService,
 )
-from data_upload.euphrosyne.auth import EuphrosyneAuth
-from data_upload.euphrosyne.project import Project, list_projects
+from data_upload.euphrosyne.auth import (
+    EuphrosyneAuth,
+    EuphrosyneAuthenticationError,
+    clear_tokens,
+    load_refresh_token,
+)
+from data_upload.euphrosyne.project import (
+    Project,
+    first_project_with_runs,
+    list_projects,
+)
 from data_upload.widget.data_location import DataLocationInputLayout
 from data_upload.widget.data_type import DataTypeCheckboxesLayout
 from data_upload.widget.text_edit_stream import TextEditStream
@@ -38,6 +48,7 @@ class DataUploadWidget(QWidget):
     ):
         super().__init__()
         self.config = config
+        self.settings = settings
 
         self.context_box = QTextEdit()
         self.context_box.setReadOnly(True)
@@ -56,7 +67,7 @@ class DataUploadWidget(QWidget):
             host=self.config["euphrosyne-tools"]["url"],
             auth=EuphrosyneAuth(
                 access_token=settings.value("access_token"),
-                refresh_token=settings.value("refresh_token"),
+                refresh_token=load_refresh_token(settings),
                 host=self.config["euphrosyne"]["url"],
                 settings=settings,
             ),
@@ -66,15 +77,20 @@ class DataUploadWidget(QWidget):
             host=self.config["euphrosyne"]["url"],
             access_token=settings.value("access_token"),
         )
-        self.selectedProject = projects[0]["name"] if projects else None
+        initial_project = first_project_with_runs(projects)
+        self.selectedProject = (
+            initial_project["slug"]
+            if initial_project
+            else projects[0]["slug"] if projects else None
+        )
         self.selectedRun = (
-            projects[0]["runs"][0]["label"]
-            if projects[0] and projects[0]["runs"]
-            else None
+            initial_project["runs"][0]["label"] if initial_project else None
         )
 
         self.start_button = QPushButton("Start")
         self.start_button.setDisabled(True)
+        self.logout_button = QPushButton("Logout")
+        self.logout_button.setStyleSheet("color: #b00020;")
 
         def _generate_q_combo_box(items: list[str], placeholder: str):
             combo_box = QComboBox()
@@ -86,15 +102,21 @@ class DataUploadWidget(QWidget):
             items=[project["name"] for project in projects],
             placeholder="Project",
         )
-        self.project_select_box.currentIndexChanged.connect(self.on_project_change)
         project_label = QLabel("Project")
         project_label.setBuddy(self.project_select_box)
 
         self.run_select_box = _generate_q_combo_box(
-            items=[run["label"] for run in projects[0]["runs"]],
+            items=(
+                [run["label"] for run in initial_project["runs"]]
+                if initial_project
+                else []
+            ),
             placeholder="Run",
         )
         self.run_select_box.currentIndexChanged.connect(self.on_run_change)
+        if initial_project:
+            self.project_select_box.setCurrentIndex(projects.index(initial_project))
+        self.project_select_box.currentIndexChanged.connect(self.on_project_change)
         run_label = QLabel("Run")
         run_label.setBuddy(self.run_select_box)
 
@@ -103,6 +125,11 @@ class DataUploadWidget(QWidget):
         data_type_label = QLabel("Data type")
         data_type_label.setBuddy(self.data_type_box)
 
+        # top bar layout
+        topbarlayout = QHBoxLayout()
+        topbarlayout.addStretch()
+        topbarlayout.addWidget(self.logout_button)
+
         # buttons bar layout
         buttonslayout = QHBoxLayout()
         buttonslayout.addStretch()
@@ -110,6 +137,7 @@ class DataUploadWidget(QWidget):
 
         # main layout
         vlayout = QVBoxLayout(self)
+        vlayout.addLayout(topbarlayout)
         vlayout.addWidget(project_label)
         vlayout.addWidget(self.project_select_box)
         vlayout.addWidget(run_label)
@@ -118,7 +146,9 @@ class DataUploadWidget(QWidget):
         vlayout.addWidget(self.data_type_box)
         vlayout.addSpacing(12)
         self.data_folder_input_layout = DataLocationInputLayout()
-        self.data_folder_input_layout.folder_selected.connect(self._validate_form)
+        self.data_folder_input_layout.data_path_box.textChanged.connect(
+            lambda _text: self._validate_form()
+        )
         vlayout.addLayout(self.data_folder_input_layout)
         vlayout.addLayout(buttonslayout)
         vlayout.addWidget(self.context_box)
@@ -126,7 +156,16 @@ class DataUploadWidget(QWidget):
         self.resize(600, 300)
 
         self.start_button.clicked.connect(self.on_start)
+        self.logout_button.clicked.connect(self.on_logout)
         self.start_button.setDisabled(True)
+
+    @Slot()
+    def on_logout(self):
+        clear_tokens(self.settings)
+        self.context_box.append(
+            "Logged out. Please restart the application to log in again."
+        )
+        self.close()
 
     @Slot()
     def on_start(self):
@@ -137,6 +176,9 @@ class DataUploadWidget(QWidget):
                 self.selectedProject,
                 self.selectedRun,
             )
+        except EuphrosyneAuthenticationError as e:
+            self._handle_authentication_error(e)
+            return
         except EuphrosyneToolsConnectionError as e:
             QMessageBox.critical(
                 self,
@@ -155,11 +197,14 @@ class DataUploadWidget(QWidget):
         try:
             credentials = (
                 self.tools_service.get_run_data_upload_shared_access_signature(
-                    project_name=self.selectedProject,
+                    project_slug=self.selectedProject,
                     run_name=self.selectedRun,
                     data_type=self.data_type_box.selected_data_type.name.lower(),
                 )
             )
+        except EuphrosyneAuthenticationError as e:
+            self._handle_authentication_error(e)
+            return
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -174,10 +219,30 @@ class DataUploadWidget(QWidget):
             sas_token=credentials["token"],
         )
 
-    @Slot()
-    def on_data_upload_completed(self):
+    def _handle_authentication_error(self, error: EuphrosyneAuthenticationError):
+        clear_tokens(self.settings)
+        QMessageBox.warning(
+            self,
+            "Session expired",
+            f"{error} Please log in again.",
+        )
+        login_user(self.config, self.settings)
         self.start_button.setDisabled(False)
-        self.context_box.append("Done.")
+        self.context_box.append("Please retry the upload.")
+
+    @Slot(int)
+    def on_data_upload_completed(self, return_code: int):
+        self.start_button.setDisabled(False)
+        if return_code == 0:
+            self.context_box.append("Done.")
+            return
+
+        message = (
+            f"Upload failed. AzCopy exited with code {return_code}. "
+            "Check the output above for details."
+        )
+        self.context_box.append(message)
+        QMessageBox.critical(self, "Upload failed", message)
 
     @Slot()
     def on_conversion_failure(self, error: Exception):
@@ -188,17 +253,31 @@ class DataUploadWidget(QWidget):
     @Slot()
     def on_project_change(self, index: int):
         print(f"Project changed to {self.project_select_box.currentText()}")
-        self.selectedProject = self.project_select_box.currentText()
         self.run_select_box.clear()
-        self.run_select_box.addItems(
-            [run["label"] for run in self.projects[index]["runs"]]
-        )
-        self.run_select_box.setCurrentIndex(0)
+        self.selectedRun = None
+        self.start_button.setDisabled(True)
+
+        if index < 0 or index >= len(self.projects):
+            self.selectedProject = None
+            return
+
+        project = self.projects[index]
+        self.selectedProject = project["slug"]
+        self.run_select_box.addItems([run["label"] for run in project["runs"]])
+
+        if project["runs"]:
+            self.run_select_box.setCurrentIndex(0)
+            self.selectedRun = self.run_select_box.currentText()
+            self._validate_form()
+        else:
+            self.context_box.append(f"Project {project['name']} has no runs.")
 
     @Slot()
     def on_run_change(self, index: int):
         print(f"Run changed to {self.run_select_box.currentText()}")
-        self.selectedRun = self.run_select_box.currentText()
+        self.selectedRun = self.run_select_box.currentText() if index >= 0 else None
+        self.start_button.setDisabled(True)
+        self._validate_form()
 
     @Slot(str)
     def append_azcopy_output(self, line):
@@ -208,11 +287,13 @@ class DataUploadWidget(QWidget):
         if (
             self.selectedProject
             and self.selectedRun
-            and self.data_folder_input_layout.selected_folder
+            and self.data_folder_input_layout.has_valid_data_folder
             and self.data_type_box.selected_data_type
         ):
             self.start_button.setDisabled(False)
             self.context_box.append("Ready ?\n\n")
+        else:
+            self.start_button.setDisabled(True)
 
     def _start_azcopy(self, src: str, dest: str, sas_token: str):
         self.thread = QThread()

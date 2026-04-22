@@ -13,11 +13,15 @@ else:
 
 class EuphrosyneConfig(typing.TypedDict):
     url: str
-    api_key: str
 
 
-class Config(typing.TypedDict):
-    euphrosyne: EuphrosyneConfig
+Config = typing.TypedDict(
+    "Config",
+    {
+        "euphrosyne": EuphrosyneConfig,
+        "euphrosyne-tools": EuphrosyneConfig,
+    },
+)
 
 
 def load_config() -> Config:

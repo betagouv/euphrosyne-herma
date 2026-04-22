@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PySide6.QtCore import QDir, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,6 +32,11 @@ class DataLocationInputLayout(QVBoxLayout):
     @property
     def data_folder(self) -> str | None:
         return self.data_path_box.text() or None
+
+    @property
+    def has_valid_data_folder(self) -> bool:
+        folder = self.data_folder
+        return bool(folder and Path(folder).is_dir())
 
     @Slot()
     def on_path_click(self):
