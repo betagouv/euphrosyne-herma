@@ -133,10 +133,11 @@ make format
 make style
 
 # Run unit tests
-python -m pytest
+make test
 
-# Build standalone executable
-make nuitka
+# Build standalone executable for the current release targets
+make build-windows
+make build-mac
 ```
 
 ### Dependencies
@@ -151,7 +152,9 @@ make nuitka
 
 - `black==25.1.0` - Code formatting
 - `isort==6.0.1` - Import sorting
-- `Nuitka==2.7.6` - Python compiler for distribution
+- `pyinstaller==6.14.2` - Standalone executable packaging
+- `pytest==8.4.1` - Unit testing
+- `pytest-httpx==0.35.0` - HTTP mocking for tests
 
 ## Project Structure
 
@@ -189,18 +192,26 @@ data-upload/
 
 ## Building for Distribution
 
-Create a standalone executable using pyinstaller:
+Create a standalone executable using PyInstaller. The Makefile targets mirror the
+GitHub release workflow:
+
+```bash
+make build-windows
+make build-mac
+```
+
+The equivalent direct commands are:
 
 ### Windows
 
 ```bash
- pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --add-data "bin/*:bin" --windowed --icon assets/icon.ico data_upload/gui.py
+pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --windowed --icon assets/icon.ico data_upload/gui.py
 ```
 
 ### Mac
 
 ```bash
-pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --add-data "bin/*:bin" --windowed --icon assets/icon.icns data_upload/gui.py
+pyinstaller --add-data "assets/icon.png:assets" --name "Euphrosyne Herma" --add-data "config.yml:." --windowed --icon assets/icon.icns data_upload/gui.py
 ```
 
 This creates an executable with all dependencies bundled in a related folder.

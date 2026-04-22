@@ -195,9 +195,7 @@ def test_cli_uses_provided_email_without_prompting(monkeypatch, tmp_path):
         lambda host, email, password: login_calls.append((host, email, password))
         or ("access-token", "refresh-token"),
     )
-    monkeypatch.setattr(
-        cli_module, "save_refresh_token", lambda settings, token: None
-    )
+    monkeypatch.setattr(cli_module, "save_refresh_token", lambda settings, token: None)
     monkeypatch.setattr(cli_module, "is_azcopy_installed", lambda: True)
     monkeypatch.setattr(cli_module, "EuphrosyneToolsService", FakeToolsService)
     monkeypatch.setattr(

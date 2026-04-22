@@ -78,7 +78,9 @@ def _login(config, settings: QSettings, email: str | None) -> tuple[str, str]:
         password=password,
     )
     if tokens is None:
-        raise EuphrosyneAuthenticationError("Login failed. Please check your credentials.")
+        raise EuphrosyneAuthenticationError(
+            "Login failed. Please check your credentials."
+        )
 
     access_token, refresh_token = tokens
     settings.setValue("access_token", access_token)

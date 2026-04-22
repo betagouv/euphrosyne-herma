@@ -40,4 +40,3 @@ def test_main_delegates_to_cli_when_upload_args_are_present(monkeypatch, tmp_pat
 
     assert exit_code == 7
     assert cli_calls == [argv]
-

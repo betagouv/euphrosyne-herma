@@ -1,5 +1,5 @@
-from data_upload.widget import data_upload as data_upload_module
 from data_upload.euphrosyne.auth import EuphrosyneAuthenticationError
+from data_upload.widget import data_upload as data_upload_module
 from data_upload.widget.data_upload import DataUploadWidget
 
 
