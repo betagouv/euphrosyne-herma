@@ -57,7 +57,7 @@ class FakeToolsService:
             raise self.init_error
 
     def get_run_data_upload_shared_access_signature(
-        self, project_name, run_name, data_type
+        self, project_slug, run_name, data_type
     ):
         if self.sas_error:
             raise self.sas_error
@@ -227,7 +227,7 @@ def test_project_without_runs_does_not_crash_and_keeps_start_disabled(
         [{"name": "Project A", "slug": "project-a", "runs": []}],
     )
     try:
-        assert widget.selectedProject == "Project A"
+        assert widget.selectedProject == "project-a"
         assert widget.selectedRun is None
         assert widget.project_select_box.count() == 1
         assert widget.run_select_box.count() == 0
@@ -276,7 +276,7 @@ def test_first_project_with_runs_is_selected_initially(qapp, monkeypatch):
     )
     try:
         assert widget.project_select_box.currentText() == "Project B"
-        assert widget.selectedProject == "Project B"
+        assert widget.selectedProject == "project-b"
         assert widget.run_select_box.currentText() == "Run 1"
         assert widget.selectedRun == "Run 1"
     finally:
@@ -302,7 +302,7 @@ def test_switching_to_project_without_runs_clears_run_and_disables_start(
 
         widget.project_select_box.setCurrentIndex(0)
 
-        assert widget.selectedProject == "Project A"
+        assert widget.selectedProject == "project-a"
         assert widget.selectedRun is None
         assert widget.run_select_box.count() == 0
         assert widget.start_button.isEnabled() is False

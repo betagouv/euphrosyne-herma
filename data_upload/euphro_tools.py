@@ -26,13 +26,13 @@ class EuphrosyneToolsService:
         self.host = host
         self.auth = auth
 
-    def init_folders(self, project_name: str, run_name: str) -> str:
+    def init_folders(self, project_slug: str, run_name: str) -> str:
         """Initialize the project and run data folders."""
 
         # Project folder
         try:
             response = httpx.post(
-                f"{self.host}/data/{project_name}/init",
+                f"{self.host}/data/{project_slug}/init",
                 headers={
                     "Accept": "application/json",
                 },
@@ -53,7 +53,7 @@ class EuphrosyneToolsService:
 
         # Run data folders
         response = httpx.post(
-            f"{self.host}/data/{project_name}/runs/{run_name}/init",
+            f"{self.host}/data/{project_slug}/runs/{run_name}/init",
             headers={
                 "Accept": "application/json",
             },
@@ -70,12 +70,12 @@ class EuphrosyneToolsService:
             raise InitFoldersError(f"Failed to initialize run folders: {response.text}")
 
     def get_run_data_upload_shared_access_signature(
-        self, project_name: str, run_name: str, data_type: str
+        self, project_slug: str, run_name: str, data_type: str
     ) -> SASTokenCredentials:
         """Return a token used to upload run data to file storage."""
         try:
             response = httpx.get(
-                f"{self.host}/data/{project_name}/runs/{run_name}/upload/shared_access_signature?data_type={data_type}",
+                f"{self.host}/data/{project_slug}/runs/{run_name}/upload/shared_access_signature?data_type={data_type}",
                 headers={
                     "Accept": "application/json",
                 },

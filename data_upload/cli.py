@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Upload a data folder to an Euphrosyne run from the terminal."
     )
-    parser.add_argument("--project", required=True, help="Euphrosyne project name")
+    parser.add_argument("--project", required=True, help="Euphrosyne project slug")
     parser.add_argument("--run", required=True, help="Euphrosyne run label")
     parser.add_argument(
         "--data-type",
@@ -113,7 +113,7 @@ def run_upload(args: argparse.Namespace) -> int:
     )
     tools_service.init_folders(args.project, args.run)
     credentials = tools_service.get_run_data_upload_shared_access_signature(
-        project_name=args.project,
+        project_slug=args.project,
         run_name=args.run,
         data_type=DATA_TYPES[args.data_type],
     )

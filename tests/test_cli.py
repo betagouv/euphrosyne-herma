@@ -89,13 +89,13 @@ def test_cli_uploads_data_and_normalizes_data_type(
         def __init__(self, host, auth):
             calls["service"].append((host, auth.access_token, auth.refresh_token))
 
-        def init_folders(self, project_name, run_name):
-            calls["init"].append((project_name, run_name))
+        def init_folders(self, project_slug, run_name):
+            calls["init"].append((project_slug, run_name))
 
         def get_run_data_upload_shared_access_signature(
-            self, project_name, run_name, data_type
+            self, project_slug, run_name, data_type
         ):
-            calls["sas"].append((project_name, run_name, data_type))
+            calls["sas"].append((project_slug, run_name, data_type))
             return {"url": "https://storage.example/share", "token": "sas-token"}
 
     def fake_login(host, email, password):
@@ -178,7 +178,7 @@ def test_cli_uses_provided_email_without_prompting(monkeypatch, tmp_path):
             pass
 
         def get_run_data_upload_shared_access_signature(
-            self, project_name, run_name, data_type
+            self, project_slug, run_name, data_type
         ):
             return {"url": "https://storage.example/share", "token": "sas-token"}
 

@@ -79,9 +79,9 @@ class DataUploadWidget(QWidget):
         )
         initial_project = first_project_with_runs(projects)
         self.selectedProject = (
-            initial_project["name"]
+            initial_project["slug"]
             if initial_project
-            else projects[0]["name"] if projects else None
+            else projects[0]["slug"] if projects else None
         )
         self.selectedRun = (
             initial_project["runs"][0]["label"] if initial_project else None
@@ -197,7 +197,7 @@ class DataUploadWidget(QWidget):
         try:
             credentials = (
                 self.tools_service.get_run_data_upload_shared_access_signature(
-                    project_name=self.selectedProject,
+                    project_slug=self.selectedProject,
                     run_name=self.selectedRun,
                     data_type=self.data_type_box.selected_data_type.name.lower(),
                 )
@@ -262,7 +262,7 @@ class DataUploadWidget(QWidget):
             return
 
         project = self.projects[index]
-        self.selectedProject = project["name"]
+        self.selectedProject = project["slug"]
         self.run_select_box.addItems([run["label"] for run in project["runs"]])
 
         if project["runs"]:
