@@ -187,10 +187,19 @@ class DataUploadWidget(QWidget):
             sas_token=credentials["token"],
         )
 
-    @Slot()
-    def on_data_upload_completed(self):
+    @Slot(int)
+    def on_data_upload_completed(self, return_code: int):
         self.start_button.setDisabled(False)
-        self.context_box.append("Done.")
+        if return_code == 0:
+            self.context_box.append("Done.")
+            return
+
+        message = (
+            f"Upload failed. AzCopy exited with code {return_code}. "
+            "Check the output above for details."
+        )
+        self.context_box.append(message)
+        QMessageBox.critical(self, "Upload failed", message)
 
     @Slot()
     def on_conversion_failure(self, error: Exception):
