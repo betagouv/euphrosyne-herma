@@ -17,7 +17,11 @@ from data_upload.euphro_tools import (
     EuphrosyneToolsService,
 )
 from data_upload.euphrosyne.auth import EuphrosyneAuth
-from data_upload.euphrosyne.project import Project, list_projects
+from data_upload.euphrosyne.project import (
+    Project,
+    first_project_with_runs,
+    list_projects,
+)
 from data_upload.widget.data_location import DataLocationInputLayout
 from data_upload.widget.data_type import DataTypeCheckboxesLayout
 from data_upload.widget.text_edit_stream import TextEditStream
@@ -66,11 +70,14 @@ class DataUploadWidget(QWidget):
             host=self.config["euphrosyne"]["url"],
             access_token=settings.value("access_token"),
         )
-        self.selectedProject = projects[0]["name"] if projects else None
+        initial_project = first_project_with_runs(projects)
+        self.selectedProject = (
+            initial_project["name"]
+            if initial_project
+            else projects[0]["name"] if projects else None
+        )
         self.selectedRun = (
-            projects[0]["runs"][0]["label"]
-            if projects[0] and projects[0]["runs"]
-            else None
+            initial_project["runs"][0]["label"] if initial_project else None
         )
 
         self.start_button = QPushButton("Start")
@@ -86,15 +93,21 @@ class DataUploadWidget(QWidget):
             items=[project["name"] for project in projects],
             placeholder="Project",
         )
-        self.project_select_box.currentIndexChanged.connect(self.on_project_change)
         project_label = QLabel("Project")
         project_label.setBuddy(self.project_select_box)
 
         self.run_select_box = _generate_q_combo_box(
-            items=[run["label"] for run in projects[0]["runs"]],
+            items=(
+                [run["label"] for run in initial_project["runs"]]
+                if initial_project
+                else []
+            ),
             placeholder="Run",
         )
         self.run_select_box.currentIndexChanged.connect(self.on_run_change)
+        if initial_project:
+            self.project_select_box.setCurrentIndex(projects.index(initial_project))
+        self.project_select_box.currentIndexChanged.connect(self.on_project_change)
         run_label = QLabel("Run")
         run_label.setBuddy(self.run_select_box)
 
@@ -188,17 +201,31 @@ class DataUploadWidget(QWidget):
     @Slot()
     def on_project_change(self, index: int):
         print(f"Project changed to {self.project_select_box.currentText()}")
-        self.selectedProject = self.project_select_box.currentText()
         self.run_select_box.clear()
-        self.run_select_box.addItems(
-            [run["label"] for run in self.projects[index]["runs"]]
-        )
-        self.run_select_box.setCurrentIndex(0)
+        self.selectedRun = None
+        self.start_button.setDisabled(True)
+
+        if index < 0 or index >= len(self.projects):
+            self.selectedProject = None
+            return
+
+        project = self.projects[index]
+        self.selectedProject = project["name"]
+        self.run_select_box.addItems([run["label"] for run in project["runs"]])
+
+        if project["runs"]:
+            self.run_select_box.setCurrentIndex(0)
+            self.selectedRun = self.run_select_box.currentText()
+            self._validate_form()
+        else:
+            self.context_box.append(f"Project {project['name']} has no runs.")
 
     @Slot()
     def on_run_change(self, index: int):
         print(f"Run changed to {self.run_select_box.currentText()}")
-        self.selectedRun = self.run_select_box.currentText()
+        self.selectedRun = self.run_select_box.currentText() if index >= 0 else None
+        self.start_button.setDisabled(True)
+        self._validate_form()
 
     @Slot(str)
     def append_azcopy_output(self, line):
@@ -213,6 +240,8 @@ class DataUploadWidget(QWidget):
         ):
             self.start_button.setDisabled(False)
             self.context_box.append("Ready ?\n\n")
+        else:
+            self.start_button.setDisabled(True)
 
     def _start_azcopy(self, src: str, dest: str, sas_token: str):
         self.thread = QThread()
