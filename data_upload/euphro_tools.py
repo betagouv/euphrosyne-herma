@@ -40,7 +40,7 @@ class EuphrosyneToolsService:
             )
         except httpx.ConnectError as e:
             raise EuphrosyneToolsConnectionError() from e
-
+        print(f"{self.host}/data/{project_slug}/init")
         # TODO : handle folder already created
         if response.status_code == 400:
             message = response.json().get("detail")

@@ -4,7 +4,15 @@ import httpx
 import sentry_sdk
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox, QVBoxLayout
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QVBoxLayout,
+)
 
 from data_upload.app.init import init_access_token, init_azcopy
 from data_upload.app.login import login_user
@@ -17,6 +25,7 @@ from data_upload.euphrosyne.project import (
 from data_upload.utils import BUNDLE_DIR, IS_BUNDLED
 from data_upload.widget.data_upload import DataUploadWidget
 from data_upload.widget.text_edit_stream import TextEditStream
+from data_upload.widget.theme import apply_app_theme
 
 settings = QSettings("Euphrosyne", "Herma")
 
@@ -32,10 +41,40 @@ class StartupDialog:
         self.dialog = QDialog()
         self.dialog.setWindowTitle("Starting Euphrosyne Herma")
         self.dialog.setModal(False)
+        self.dialog.setMinimumWidth(420)
+
+        icon_label = QLabel()
+        icon_pixmap = QIcon(ICON_PATH).pixmap(44, 44)
+        icon_label.setPixmap(icon_pixmap)
+
+        title = QLabel("Euphrosyne Herma")
+        title.setObjectName("DialogTitle")
+        subtitle = QLabel("Preparing the upload workspace")
+        subtitle.setObjectName("Subtitle")
+
+        heading_layout = QVBoxLayout()
+        heading_layout.setSpacing(2)
+        heading_layout.addWidget(title)
+        heading_layout.addWidget(subtitle)
+
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+        header_layout.addWidget(icon_label)
+        header_layout.addLayout(heading_layout)
+
         self.label = QLabel()
+        self.label.setObjectName("StatusMessage")
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setTextVisible(False)
+
         layout = QVBoxLayout(self.dialog)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
+        layout.addLayout(header_layout)
         layout.addWidget(self.label)
-        self.dialog.setMinimumWidth(320)
+        layout.addWidget(self.progress_bar)
 
     def show_message(self, message: str):
         self.label.setText(message)
@@ -55,6 +94,7 @@ class ConverterGUI:
         app.setWindowIcon(QIcon(ICON_PATH))
         app.setApplicationName("Euphrosyne Herma")
         app.setApplicationDisplayName("Euphrosyne Herma")
+        apply_app_theme(app)
 
         startup_dialog = StartupDialog(app)
         startup_dialog.show_message("Loading configuration...")

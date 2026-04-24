@@ -91,6 +91,8 @@ def test_startup_dialog_is_modeless_and_has_no_message_box_buttons(qapp):
 
     assert startup_dialog.dialog.isModal() is False
     assert startup_dialog.label.text() == "Checking AzCopy..."
+    assert startup_dialog.progress_bar.minimum() == 0
+    assert startup_dialog.progress_bar.maximum() == 0
 
     startup_dialog.close()
 
