@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QComboBox, QCompleter
 
 from data_upload.euphrosyne.auth import EuphrosyneAuthenticationError
 from data_upload.widget import data_upload as data_upload_module
+from data_upload.widget.data_type import DataTypeCheckboxesLayout, ExtractionType
 from data_upload.widget.data_upload import DataUploadWidget
 
 
@@ -94,6 +95,20 @@ def test_empty_project_list_does_not_crash_and_keeps_start_disabled(qapp, monkey
         assert widget.project_select_box.count() == 0
         assert widget.run_select_box.count() == 0
         assert widget.start_button.isEnabled() is False
+    finally:
+        widget.close()
+
+
+def test_data_type_selector_emits_extraction_type_on_index_change(qapp):
+    widget = DataTypeCheckboxesLayout()
+    emitted_values = []
+    try:
+        widget.selected.connect(emitted_values.append)
+
+        widget.setCurrentIndex(1)
+
+        assert emitted_values == [ExtractionType.PROCESSED_DATA]
+        assert widget.selected_data_type == ExtractionType.PROCESSED_DATA
     finally:
         widget.close()
 
@@ -289,6 +304,23 @@ def test_typed_existing_data_folder_enables_start(qapp, monkeypatch, tmp_path):
         assert widget.start_button.text() == "Start upload"
         assert widget.status_title_label.text() == "Ready to upload"
         assert "Ready ?" not in widget.context_box.toPlainText()
+    finally:
+        widget.close()
+
+
+def test_changing_data_type_keeps_valid_form_enabled(qapp, monkeypatch, tmp_path):
+    widget = _widget(
+        monkeypatch,
+        [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],
+    )
+    try:
+        widget.data_folder_input_layout.data_path_box.setText(str(tmp_path))
+
+        widget.data_type_box.setCurrentIndex(1)
+
+        assert widget.data_type_box.selected_data_type == ExtractionType.PROCESSED_DATA
+        assert widget.start_button.isEnabled() is True
+        assert widget.status_title_label.text() == "Ready to upload"
     finally:
         widget.close()
 
