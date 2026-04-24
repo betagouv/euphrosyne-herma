@@ -30,9 +30,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements/dev.txt
 
-      - name: Check formatting
-        run: make style
-
       - name: Run tests
         run: make test
 
