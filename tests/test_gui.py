@@ -6,7 +6,6 @@ import pytest
 from data_upload import gui as gui_module
 from data_upload.euphrosyne.project import ProjectLoadingError
 
-
 CONFIG_CATALOG = {
     "default-environment": "euphrosyne",
     "environments": {

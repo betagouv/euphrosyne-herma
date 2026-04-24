@@ -1,6 +1,5 @@
 from data_upload.widget.login import LoginDialog
 
-
 CONFIG = {
     "default-environment": "euphrosyne",
     "environments": {

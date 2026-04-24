@@ -1,7 +1,11 @@
 from PySide6 import QtWidgets
 from PySide6.QtCore import Qt
 
-from data_upload.config import ConfigCatalog, get_environment_label, list_environment_keys
+from data_upload.config import (
+    ConfigCatalog,
+    get_environment_label,
+    list_environment_keys,
+)
 
 
 class LoginDialog(QtWidgets.QDialog):

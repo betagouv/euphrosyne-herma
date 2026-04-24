@@ -9,7 +9,12 @@ import httpx
 from PySide6.QtCore import QSettings
 
 from data_upload.azcopy import download_azcopy, get_copy_command, is_azcopy_installed
-from data_upload.config import ConfigCatalog, list_environment_keys, load_config, resolve_config
+from data_upload.config import (
+    ConfigCatalog,
+    list_environment_keys,
+    load_config,
+    resolve_config,
+)
 from data_upload.euphro_tools import (
     EuphrosyneToolsConnectionError,
     EuphrosyneToolsService,
