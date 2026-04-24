@@ -13,7 +13,7 @@ def test_get_copy_command_builds_recursive_command(monkeypatch, tmp_path):
     binary = tmp_path / "bin" / "azcopy"
     binary.parent.mkdir()
     binary.write_text("binary")
-    monkeypatch.setattr(azcopy, "azcopy_path", binary)
+    monkeypatch.setattr(azcopy, "get_azcopy_path", lambda: binary)
     monkeypatch.setattr(azcopy, "is_azcopy_installed", lambda: True)
 
     command = azcopy.get_copy_command(
@@ -30,8 +30,6 @@ def test_get_copy_command_builds_recursive_command(monkeypatch, tmp_path):
 
 
 def test_get_copy_command_raises_when_source_does_not_exist(monkeypatch, tmp_path):
-    binary = tmp_path / "azcopy"
-    monkeypatch.setattr(azcopy, "azcopy_path", binary)
     monkeypatch.setattr(azcopy, "is_azcopy_installed", lambda: True)
 
     with pytest.raises(FileNotFoundError):
@@ -52,7 +50,7 @@ def test_get_copy_command_raises_when_azcopy_is_missing(monkeypatch, tmp_path):
 
 
 def test_is_azcopy_installed_returns_false_when_path_is_not_configured(monkeypatch):
-    monkeypatch.setattr(azcopy, "azcopy_path", None)
+    monkeypatch.setattr(azcopy, "get_azcopy_path", lambda: None)
 
     assert azcopy.is_azcopy_installed() is False
 
@@ -66,7 +64,7 @@ def test_is_azcopy_installed_runs_version_check(monkeypatch, tmp_path):
         calls.append((command, check))
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(azcopy, "azcopy_path", binary)
+    monkeypatch.setattr(azcopy, "get_azcopy_path", lambda: binary)
     monkeypatch.setattr(azcopy.subprocess, "run", fake_run)
 
     assert azcopy.is_azcopy_installed() is True
@@ -82,10 +80,37 @@ def test_is_azcopy_installed_returns_false_when_version_check_fails(
     def fake_run(command, check):
         raise subprocess.CalledProcessError(1, command)
 
-    monkeypatch.setattr(azcopy, "azcopy_path", binary)
+    monkeypatch.setattr(azcopy, "get_azcopy_path", lambda: binary)
     monkeypatch.setattr(azcopy.subprocess, "run", fake_run)
 
     assert azcopy.is_azcopy_installed() is False
+
+
+def test_get_bin_folder_uses_app_data_for_bundled_macos(monkeypatch, tmp_path):
+    app_data_dir = tmp_path / "app-data"
+    bundle_dir = tmp_path / "Euphrosyne Herma.app" / "Contents" / "Frameworks"
+
+    monkeypatch.setattr(azcopy, "IS_BUNDLED", True)
+    monkeypatch.setattr(azcopy, "_is_macos", True)
+    monkeypatch.setattr(azcopy, "_is_windows", False)
+    monkeypatch.setattr(azcopy, "BUNDLE_DIR", bundle_dir)
+    monkeypatch.setattr(
+        azcopy.QStandardPaths,
+        "writableLocation",
+        lambda location: str(app_data_dir),
+    )
+
+    assert azcopy._get_bin_folder() == app_data_dir / "bin"
+    assert azcopy._get_bin_folder() != bundle_dir / "bin"
+
+
+def test_get_bin_folder_uses_repo_bin_for_non_bundled_runs(monkeypatch):
+    monkeypatch.setattr(azcopy, "IS_BUNDLED", False)
+    monkeypatch.setattr(azcopy, "_is_macos", False)
+
+    assert azcopy._get_bin_folder() == (
+        Path(azcopy.__file__).resolve().parent.parent / "bin"
+    )
 
 
 def test_download_azcopy_downloads_unzips_and_marks_macos_binary_executable(
@@ -95,12 +120,14 @@ def test_download_azcopy_downloads_unzips_and_marks_macos_binary_executable(
     archive = tmp_path / "azcopy.zip"
     chmod_calls = []
 
-    def fake_download_mac_azcopy():
+    def fake_download_mac_azcopy(target_dir):
+        assert target_dir == bin_folder
         archive.write_text("zip")
         return archive
 
-    def fake_unzip_azcopy(zip_path):
+    def fake_unzip_azcopy(zip_path, target_dir):
         assert zip_path == archive
+        assert target_dir == bin_folder
         (bin_folder / "azcopy").mkdir(parents=True)
         (bin_folder / "azcopy" / "azcopy").write_text("binary")
         archive.unlink()
@@ -109,8 +136,10 @@ def test_download_azcopy_downloads_unzips_and_marks_macos_binary_executable(
         chmod_calls.append((command, check))
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(azcopy, "_bin_folder", bin_folder)
-    monkeypatch.setattr(azcopy, "azcopy_path", bin_folder / "azcopy" / "azcopy")
+    monkeypatch.setattr(azcopy, "_get_bin_folder", lambda: bin_folder)
+    monkeypatch.setattr(
+        azcopy, "get_azcopy_path", lambda: bin_folder / "azcopy" / "azcopy"
+    )
     monkeypatch.setattr(azcopy, "_is_macos", True)
     monkeypatch.setattr(azcopy, "_is_windows", False)
     monkeypatch.setattr(azcopy, "_os", "Darwin")
@@ -126,9 +155,7 @@ def test_download_azcopy_downloads_unzips_and_marks_macos_binary_executable(
     ]
 
 
-def test_download_azcopy_raises_for_unsupported_os(monkeypatch, tmp_path):
-    monkeypatch.setattr(azcopy, "azcopy_path", tmp_path / "azcopy")
-    monkeypatch.setattr(azcopy, "_bin_folder", tmp_path / "bin")
+def test_download_azcopy_raises_for_unsupported_os(monkeypatch):
     monkeypatch.setattr(azcopy, "_is_macos", False)
     monkeypatch.setattr(azcopy, "_is_windows", False)
     monkeypatch.setattr(azcopy, "_os", "Linux")
