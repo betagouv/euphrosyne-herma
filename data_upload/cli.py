@@ -9,7 +9,12 @@ import httpx
 from PySide6.QtCore import QSettings
 
 from data_upload.azcopy import download_azcopy, get_copy_command, is_azcopy_installed
-from data_upload.config import load_config
+from data_upload.config import (
+    ConfigCatalog,
+    list_environment_keys,
+    load_config,
+    resolve_config,
+)
 from data_upload.euphro_tools import (
     EuphrosyneToolsConnectionError,
     EuphrosyneToolsService,
@@ -31,7 +36,7 @@ DATA_TYPES = {
 }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(config_catalog: ConfigCatalog) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Upload a data folder to an Euphrosyne run from the terminal."
     )
@@ -47,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--data-path",
         required=True,
         help="Existing local data folder to upload",
+    )
+    parser.add_argument(
+        "--environment",
+        choices=list_environment_keys(config_catalog),
+        help="Target environment (defaults to the configured default environment)",
     )
     parser.add_argument("--email", help="Euphrosyne account email")
     parser.add_argument("--log", default="INFO", help="Log level (default: INFO)")
@@ -94,10 +104,10 @@ def _ensure_azcopy_installed():
         download_azcopy()
 
 
-def run_upload(args: argparse.Namespace) -> int:
+def run_upload(args: argparse.Namespace, config_catalog: ConfigCatalog) -> int:
     _configure_logging(args.log)
     data_path = _validate_data_path(args.data_path)
-    config = load_config()
+    config = resolve_config(config_catalog, args.environment)
     settings = QSettings("Euphrosyne", "Herma")
     access_token, refresh_token = _login(config, settings, args.email)
     _ensure_azcopy_installed()
@@ -123,11 +133,12 @@ def run_upload(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+    config_catalog = load_config()
+    parser = build_parser(config_catalog)
     args = parser.parse_args(argv)
 
     try:
-        return run_upload(args)
+        return run_upload(args, config_catalog)
     except (
         EuphrosyneAuthenticationError,
         EuphrosyneConnectionError,
