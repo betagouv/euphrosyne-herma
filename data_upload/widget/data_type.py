@@ -10,7 +10,7 @@ class ExtractionType(enum.Enum):
 
 
 class DataTypeCheckboxesLayout(QtWidgets.QComboBox):
-    selected = Signal(ExtractionType | None)
+    selected = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +36,6 @@ class DataTypeCheckboxesLayout(QtWidgets.QComboBox):
             None,
         )
 
-    def on_selection_changed(self):
+    def on_selection_changed(self, _index: int):
         selected_type = self.selected_data_type
         self.selected.emit(selected_type)
