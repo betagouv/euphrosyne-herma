@@ -13,7 +13,7 @@ class LoginDialog(QtWidgets.QDialog):
     ):
         super().__init__()
         self.setWindowTitle("Login to Euphrosyne")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(440)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -29,12 +29,17 @@ class LoginDialog(QtWidgets.QDialog):
         form_layout = QtWidgets.QFormLayout()
         form_layout.setLabelAlignment(Qt.AlignLeft)
         form_layout.setFormAlignment(Qt.AlignTop)
+        form_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
         form_layout.setVerticalSpacing(10)
         form_layout.setHorizontalSpacing(14)
 
         environment_label = QtWidgets.QLabel("Environment")
         environment_label.setObjectName("FieldLabel")
         self.environment_select = QtWidgets.QComboBox()
+        self.environment_select.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self.environment_select.setMinimumWidth(300)
         for environment in list_environment_keys(config):
             self.environment_select.addItem(
                 get_environment_label(environment), environment
@@ -49,6 +54,10 @@ class LoginDialog(QtWidgets.QDialog):
         email_label = QtWidgets.QLabel("Email")
         email_label.setObjectName("FieldLabel")
         self.email_edit = QtWidgets.QLineEdit()
+        self.email_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self.email_edit.setMinimumWidth(300)
         self.email_edit.setPlaceholderText("name@example.com")
         email_label.setBuddy(self.email_edit)
         form_layout.addRow(email_label, self.email_edit)
@@ -56,6 +65,10 @@ class LoginDialog(QtWidgets.QDialog):
         password_label = QtWidgets.QLabel("Password")
         password_label.setObjectName("FieldLabel")
         self.password_edit = QtWidgets.QLineEdit()
+        self.password_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self.password_edit.setMinimumWidth(300)
         self.password_edit.setEchoMode(QtWidgets.QLineEdit.Password)
         self.password_edit.setPlaceholderText("Enter your password")
         password_label.setBuddy(self.password_edit)
