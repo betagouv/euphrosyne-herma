@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from data_upload.app.init import init_access_token, init_azcopy
 from data_upload.app.login import login_user
-from data_upload.config import load_config
+from data_upload.config import ENVIRONMENT_SETTING_KEY, load_config, resolve_config
 from data_upload.euphrosyne.project import (
     ProjectLoadingError,
     first_project_with_runs,
@@ -98,7 +98,10 @@ class ConverterGUI:
 
         startup_dialog = StartupDialog(app)
         startup_dialog.show_message("Loading configuration...")
-        config = load_config()
+        config_catalog = load_config()
+        config = resolve_config(
+            config_catalog, settings.value(ENVIRONMENT_SETTING_KEY, None)
+        )
 
         startup_dialog.show_message("Checking AzCopy...")
         init_azcopy(app)
@@ -108,7 +111,7 @@ class ConverterGUI:
 
         if login_required:
             startup_dialog.close()
-            login_user(config, settings)
+            config = login_user(config_catalog, config, settings)
             startup_dialog.show_message("Loading projects...")
         else:
             startup_dialog.show_message("Loading projects...")
@@ -142,6 +145,7 @@ class ConverterGUI:
         sys.stderr = stdout_stream
 
         w = DataUploadWidget(
+            config_catalog=config_catalog,
             config=config,
             settings=settings,
             stdout_stream=stdout_stream,

@@ -1,9 +1,16 @@
 from PySide6 import QtWidgets
 from PySide6.QtCore import Qt
 
+from data_upload.config import ConfigCatalog, get_environment_label, list_environment_keys
+
 
 class LoginDialog(QtWidgets.QDialog):
-    def __init__(self, config):
+    def __init__(
+        self,
+        config: ConfigCatalog,
+        selected_environment: str,
+        allow_environment_change: bool = True,
+    ):
         super().__init__()
         self.setWindowTitle("Login to Euphrosyne")
         self.setMinimumWidth(380)
@@ -24,6 +31,20 @@ class LoginDialog(QtWidgets.QDialog):
         form_layout.setFormAlignment(Qt.AlignTop)
         form_layout.setVerticalSpacing(10)
         form_layout.setHorizontalSpacing(14)
+
+        environment_label = QtWidgets.QLabel("Environment")
+        environment_label.setObjectName("FieldLabel")
+        self.environment_select = QtWidgets.QComboBox()
+        for environment in list_environment_keys(config):
+            self.environment_select.addItem(
+                get_environment_label(environment), environment
+            )
+        current_index = self.environment_select.findData(selected_environment)
+        if current_index >= 0:
+            self.environment_select.setCurrentIndex(current_index)
+        self.environment_select.setEnabled(allow_environment_change)
+        environment_label.setBuddy(self.environment_select)
+        form_layout.addRow(environment_label, self.environment_select)
 
         email_label = QtWidgets.QLabel("Email")
         email_label.setObjectName("FieldLabel")
@@ -59,6 +80,13 @@ class LoginDialog(QtWidgets.QDialog):
 
     def get_credentials(self):
         return self.email_edit.text(), self.password_edit.text()
+
+    def get_login_data(self):
+        return (
+            self.environment_select.currentData(),
+            self.email_edit.text(),
+            self.password_edit.text(),
+        )
 
     def _validate_credentials(self):
         self.ok_button.setEnabled(

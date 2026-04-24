@@ -33,7 +33,22 @@ class FakeMessageBox:
         cls.warning_calls.append(args)
 
 
+CONFIG_CATALOG = {
+    "default-environment": "euphrosyne",
+    "environments": {
+        "euphrosyne": {
+            "url": "https://euphrosyne.example",
+            "euphro-tools-url": "https://tools.example",
+        },
+        "euphrosyne-staging": {
+            "url": "https://staging.euphrosyne.example",
+            "euphro-tools-url": "https://staging.tools.example",
+        },
+    },
+}
+
 CONFIG = {
+    "environment": "euphrosyne",
     "euphrosyne": {"url": "https://euphrosyne.example"},
     "euphrosyne-tools": {"url": "https://tools.example"},
 }
@@ -46,7 +61,11 @@ def _widget(monkeypatch, projects):
     monkeypatch.setattr(
         data_upload_module, "load_refresh_token", lambda settings: "refresh-token"
     )
-    widget = DataUploadWidget(config=CONFIG, settings=FakeSettings())
+    widget = DataUploadWidget(
+        config_catalog=CONFIG_CATALOG,
+        config=CONFIG,
+        settings=FakeSettings(),
+    )
     return widget
 
 
@@ -171,7 +190,12 @@ def test_auth_failure_during_folder_init_clears_tokens_prompts_login_and_stops(
     monkeypatch.setattr(
         data_upload_module,
         "login_user",
-        lambda config, settings: login_calls.append((config, settings)),
+        lambda config_catalog, config, settings, allow_environment_change=True: (
+            login_calls.append(
+                (config_catalog, config, settings, allow_environment_change)
+            )
+            or config
+        ),
     )
     widget = _widget(
         monkeypatch,
@@ -186,7 +210,7 @@ def test_auth_failure_during_folder_init_clears_tokens_prompts_login_and_stops(
         widget.on_start()
 
         assert widget.settings.values == {}
-        assert login_calls == [(CONFIG, widget.settings)]
+        assert login_calls == [(CONFIG_CATALOG, CONFIG, widget.settings, False)]
         assert len(FakeMessageBox.warning_calls) == 1
         assert FakeMessageBox.warning_calls[0][1] == "Session expired"
         assert widget.status_title_label.text() == "Session expired"
@@ -205,7 +229,12 @@ def test_auth_failure_during_sas_request_clears_tokens_prompts_login_and_stops(
     monkeypatch.setattr(
         data_upload_module,
         "login_user",
-        lambda config, settings: login_calls.append((config, settings)),
+        lambda config_catalog, config, settings, allow_environment_change=True: (
+            login_calls.append(
+                (config_catalog, config, settings, allow_environment_change)
+            )
+            or config
+        ),
     )
     widget = _widget(
         monkeypatch,
@@ -220,7 +249,7 @@ def test_auth_failure_during_sas_request_clears_tokens_prompts_login_and_stops(
         widget.on_start()
 
         assert widget.settings.values == {}
-        assert login_calls == [(CONFIG, widget.settings)]
+        assert login_calls == [(CONFIG_CATALOG, CONFIG, widget.settings, False)]
         assert len(FakeMessageBox.warning_calls) == 1
         assert FakeMessageBox.warning_calls[0][1] == "Session expired"
         assert widget.status_title_label.text() == "Session expired"
@@ -451,7 +480,11 @@ def test_start_upload_disables_button_and_sets_uploading_status(
 def test_auth_failure_revalidates_valid_form_after_login(qapp, monkeypatch, tmp_path):
     FakeMessageBox.warning_calls = []
     monkeypatch.setattr(data_upload_module, "QMessageBox", FakeMessageBox)
-    monkeypatch.setattr(data_upload_module, "login_user", lambda config, settings: None)
+    monkeypatch.setattr(
+        data_upload_module,
+        "login_user",
+        lambda config_catalog, config, settings, allow_environment_change=True: config,
+    )
     widget = _widget(
         monkeypatch,
         [{"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}],

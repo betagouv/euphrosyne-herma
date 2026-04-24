@@ -1,5 +1,9 @@
-euphrosyne:
-  url: "https://euphrosyne.beta.gouv.fr"
+default-environment: euphrosyne
 
-euphrosyne-tools:
-  url: "https://euphrosyne-tools-api-production.osc-secnum-fr1.scalingo.io"
+environments:
+  euphrosyne:
+    url: "https://euphrosyne.beta.gouv.fr"
+    euphro-tools-url: "https://euphrosyne-tools-api-production.osc-secnum-fr1.scalingo.io"
+  euphrosyne-staging:
+    url: "https://euphrosyne.incubateur.net"
+    euphro-tools-url: "https://euphrosyne-tools-api-staging.osc-fr1.scalingo.io"

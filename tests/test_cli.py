@@ -19,9 +19,18 @@ class FakeSettings:
         self.values.pop(key, None)
 
 
-CONFIG = {
-    "euphrosyne": {"url": "https://euphrosyne.example"},
-    "euphrosyne-tools": {"url": "https://tools.example"},
+CONFIG_CATALOG = {
+    "default-environment": "euphrosyne",
+    "environments": {
+        "euphrosyne": {
+            "url": "https://euphrosyne.example",
+            "euphro-tools-url": "https://tools.example",
+        },
+        "euphrosyne-staging": {
+            "url": "https://staging.euphrosyne.example",
+            "euphro-tools-url": "https://staging.tools.example",
+        },
+    },
 }
 
 
@@ -113,7 +122,7 @@ def test_cli_uploads_data_and_normalizes_data_type(
         calls["run"].append(command)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG)
+    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
     monkeypatch.setattr(cli_module, "QSettings", lambda org, app: settings)
     monkeypatch.setattr("builtins.input", lambda prompt: "user@example.com")
     monkeypatch.setattr(
@@ -182,7 +191,7 @@ def test_cli_uses_provided_email_without_prompting(monkeypatch, tmp_path):
         ):
             return {"url": "https://storage.example/share", "token": "sas-token"}
 
-    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG)
+    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
     monkeypatch.setattr(cli_module, "QSettings", lambda org, app: settings)
     monkeypatch.setattr(
         "builtins.input",
@@ -228,10 +237,98 @@ def test_cli_uses_provided_email_without_prompting(monkeypatch, tmp_path):
     ]
 
 
+def test_cli_accepts_environment_flag_and_uses_selected_hosts(monkeypatch, tmp_path):
+    data_path = tmp_path / "data"
+    data_path.mkdir()
+    settings = FakeSettings()
+    login_calls = []
+    service_calls = []
+
+    class FakeToolsService:
+        def __init__(self, host, auth):
+            service_calls.append((host, auth.host))
+
+        def init_folders(self, project_name, run_name):
+            pass
+
+        def get_run_data_upload_shared_access_signature(
+            self, project_slug, run_name, data_type
+        ):
+            return {"url": "https://storage.example/share", "token": "sas-token"}
+
+    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
+    monkeypatch.setattr(cli_module, "QSettings", lambda org, app: settings)
+    monkeypatch.setattr("builtins.input", lambda prompt: "user@example.com")
+    monkeypatch.setattr(cli_module.getpass, "getpass", lambda prompt: "secret")
+    monkeypatch.setattr(
+        cli_module,
+        "euphrosyne_login",
+        lambda host, email, password: login_calls.append((host, email, password))
+        or ("access-token", "refresh-token"),
+    )
+    monkeypatch.setattr(cli_module, "save_refresh_token", lambda settings, token: None)
+    monkeypatch.setattr(cli_module, "is_azcopy_installed", lambda: True)
+    monkeypatch.setattr(cli_module, "EuphrosyneToolsService", FakeToolsService)
+    monkeypatch.setattr(
+        cli_module, "get_copy_command", lambda src, dest, token: ["azcopy"]
+    )
+    monkeypatch.setattr(
+        cli_module.subprocess,
+        "run",
+        lambda command: subprocess.CompletedProcess(command, 0),
+    )
+
+    exit_code = cli_module.main(
+        [
+            "--project",
+            "Project A",
+            "--run",
+            "Run 1",
+            "--data-type",
+            "raw-data",
+            "--data-path",
+            str(data_path),
+            "--environment",
+            "euphrosyne-staging",
+        ]
+    )
+
+    assert exit_code == 0
+    assert login_calls == [
+        ("https://staging.euphrosyne.example", "user@example.com", "secret")
+    ]
+    assert service_calls == [
+        ("https://staging.tools.example", "https://staging.euphrosyne.example")
+    ]
+
+
+def test_cli_rejects_unknown_environment(monkeypatch, capsys):
+    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_module.main(
+            [
+                "--project",
+                "Project A",
+                "--run",
+                "Run 1",
+                "--data-type",
+                "raw-data",
+                "--data-path",
+                "/tmp",
+                "--environment",
+                "unknown",
+            ]
+        )
+
+    assert exit_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_cli_returns_error_when_login_fails(monkeypatch, tmp_path, capsys):
     data_path = tmp_path / "data"
     data_path.mkdir()
-    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG)
+    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
     monkeypatch.setattr(cli_module, "QSettings", lambda org, app: FakeSettings())
     monkeypatch.setattr("builtins.input", lambda prompt: "user@example.com")
     monkeypatch.setattr(cli_module.getpass, "getpass", lambda prompt: "secret")

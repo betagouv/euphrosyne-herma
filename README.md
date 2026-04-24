@@ -60,7 +60,7 @@ python -m data_upload.gui
 
 1. The application will automatically initialize AzCopy
 2. If authentication is required, a login dialog will appear
-3. Enter your Euphrosyne credentials
+3. Select the target environment and enter your Euphrosyne credentials
 4. The main data upload interface will open
 
 ### Using the Interface
@@ -83,6 +83,7 @@ python -m data_upload.main \
   --run "Run 1" \
   --data-type raw-data \
   --data-path /path/to/data \
+  --environment euphrosyne \
   --email user@example.com
 ```
 
@@ -104,11 +105,14 @@ fetches the upload SAS token, and runs AzCopy synchronously.
 The application uses a `config.yml` file for configuration:
 
 ```yaml
-euphrosyne:
-  url: "http://localhost:8000"
-
-euphrosyne-tools:
-  url: "http://localhost:8001"
+default-environment: euphrosyne
+environments:
+  euphrosyne:
+    url: "https://euphrosyne.beta.gouv.fr"
+    euphro-tools-url: "https://euphrosyne-tools-api-production.osc-secnum-fr1.scalingo.io"
+  euphrosyne-staging:
+    url: "https://euphrosyne.beta.gouv.fr"
+    euphro-tools-url: "https://euphrosyne-tools-api-staging.osc-fr1.scalingo.io"
 ```
 
 Settings are automatically saved using Qt's QSettings system under the "Euphrosyne" organization and "Herma" application name.

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from data_upload.app.azcopy import ProcessWorker
 from data_upload.app.login import login_user
-from data_upload.config import Config
+from data_upload.config import Config, ConfigCatalog
 from data_upload.euphro_tools import (
     EuphrosyneToolsConnectionError,
     EuphrosyneToolsService,
@@ -48,12 +48,14 @@ class DataUploadWidget(QWidget):
 
     def __init__(
         self,
+        config_catalog: ConfigCatalog,
         config: Config,
         settings: QSettings,
         stdout_stream: TextEditStream | None = None,
     ):
         super().__init__()
         self.setObjectName("DataUploadWidget")
+        self.config_catalog = config_catalog
         self.config = config
         self.settings = settings
         self._upload_in_progress = False
@@ -73,15 +75,7 @@ class DataUploadWidget(QWidget):
             "then press Start to begin the transfer."
         )
 
-        self.tools_service = EuphrosyneToolsService(
-            host=self.config["euphrosyne-tools"]["url"],
-            auth=EuphrosyneAuth(
-                access_token=settings.value("access_token"),
-                refresh_token=load_refresh_token(settings),
-                host=self.config["euphrosyne"]["url"],
-                settings=settings,
-            ),
-        )
+        self.tools_service = self._build_tools_service()
 
         self.projects = projects = list_projects(
             host=self.config["euphrosyne"]["url"],
@@ -234,6 +228,17 @@ class DataUploadWidget(QWidget):
         header_layout.addWidget(self.logout_button)
         return header_layout
 
+    def _build_tools_service(self) -> EuphrosyneToolsService:
+        return EuphrosyneToolsService(
+            host=self.config["euphrosyne-tools"]["url"],
+            auth=EuphrosyneAuth(
+                access_token=self.settings.value("access_token"),
+                refresh_token=load_refresh_token(self.settings),
+                host=self.config["euphrosyne"]["url"],
+                settings=self.settings,
+            ),
+        )
+
     def _configure_searchable_project_select(self):
         self.project_select_box.setEditable(True)
         self.project_select_box.setInsertPolicy(QComboBox.NoInsert)
@@ -338,7 +343,13 @@ class DataUploadWidget(QWidget):
             "Session expired",
             f"{error} Please log in again.",
         )
-        login_user(self.config, self.settings)
+        self.config = login_user(
+            self.config_catalog,
+            self.config,
+            self.settings,
+            allow_environment_change=False,
+        )
+        self.tools_service = self._build_tools_service()
         self._upload_in_progress = False
         self._set_status(
             "Session expired",
