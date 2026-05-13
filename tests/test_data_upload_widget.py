@@ -2,9 +2,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QCompleter
 
 from data_upload.euphrosyne.auth import EuphrosyneAuthenticationError
+from data_upload.euphrosyne.project import ProjectLoadingError
 from data_upload.widget import data_upload as data_upload_module
 from data_upload.widget.data_type import DataTypeCheckboxesLayout, ExtractionType
 from data_upload.widget.data_upload import DataUploadWidget
+from data_upload.widget.theme import APP_STYLESHEET
 
 
 class FakeSettings:
@@ -57,15 +59,13 @@ CONFIG = {
 
 def _widget(monkeypatch, projects):
     monkeypatch.setattr(
-        data_upload_module, "list_projects", lambda host, access_token: projects
-    )
-    monkeypatch.setattr(
         data_upload_module, "load_refresh_token", lambda settings: "refresh-token"
     )
     widget = DataUploadWidget(
         config_catalog=CONFIG_CATALOG,
         config=CONFIG,
         settings=FakeSettings(),
+        projects=projects,
     )
     return widget
 
@@ -94,6 +94,10 @@ def test_empty_project_list_does_not_crash_and_keeps_start_disabled(qapp, monkey
         assert widget.selectedRun is None
         assert widget.project_select_box.count() == 0
         assert widget.run_select_box.count() == 0
+        assert widget.refresh_projects_button.text() == ""
+        assert widget.refresh_projects_button.toolTip() == "Refresh projects"
+        assert widget.refresh_projects_button.accessibleName() == "Refresh projects"
+        assert widget.refresh_projects_button.icon().isNull() is False
         assert widget.start_button.isEnabled() is False
     finally:
         widget.close()
@@ -111,6 +115,34 @@ def test_data_type_selector_emits_extraction_type_on_index_change(qapp):
         assert widget.selected_data_type == ExtractionType.PROCESSED_DATA
     finally:
         widget.close()
+
+
+def test_refresh_button_matches_styled_project_dropdown_height(qapp, monkeypatch):
+    original_stylesheet = qapp.styleSheet()
+    qapp.setStyleSheet(APP_STYLESHEET)
+    widget = None
+    try:
+        widget = _widget(
+            monkeypatch,
+            [
+                {
+                    "name": "Project A",
+                    "slug": "project-a",
+                    "runs": [{"label": "Run 1"}],
+                }
+            ],
+        )
+        widget.show()
+        qapp.processEvents()
+
+        project_select_height = widget.project_select_box.sizeHint().height()
+        assert widget.refresh_projects_button.minimumHeight() == project_select_height
+        assert widget.refresh_projects_button.maximumHeight() == project_select_height
+        assert widget.refresh_projects_button.height() == project_select_height
+    finally:
+        if widget:
+            widget.close()
+        qapp.setStyleSheet(original_stylesheet)
 
 
 def test_upload_completion_success_appends_done_updates_status_and_reenables_start(
@@ -356,6 +388,118 @@ def test_first_project_with_runs_is_selected_initially(qapp, monkeypatch):
         assert widget.selectedProject == "project-b"
         assert widget.run_select_box.currentText() == "Run 1"
         assert widget.selectedRun == "Run 1"
+    finally:
+        widget.close()
+
+
+def test_refresh_projects_reloads_cache_and_preserves_current_selection(
+    qapp, monkeypatch
+):
+    calls = []
+    project_snapshots = [
+        [
+            {
+                "name": "Project A",
+                "slug": "project-a",
+                "runs": [{"label": "Run 1"}],
+            },
+            {
+                "name": "Project B",
+                "slug": "project-b",
+                "runs": [{"label": "Run 2"}],
+            },
+        ],
+        [
+            {
+                "name": "Project A",
+                "slug": "project-a",
+                "runs": [{"label": "Run 1"}],
+            },
+            {
+                "name": "Project B",
+                "slug": "project-b",
+                "runs": [{"label": "Run 2"}, {"label": "Run 3"}],
+            },
+            {
+                "name": "Project C",
+                "slug": "project-c",
+                "runs": [{"label": "Run 4"}],
+            },
+        ],
+    ]
+
+    def fake_init_projects(settings, config, force_refresh=False):
+        calls.append((settings, config, force_refresh))
+        return project_snapshots[len(calls) - 1]
+
+    monkeypatch.setattr(data_upload_module, "init_projects", fake_init_projects)
+    monkeypatch.setattr(
+        data_upload_module, "load_refresh_token", lambda settings: "refresh-token"
+    )
+    widget = DataUploadWidget(
+        config_catalog=CONFIG_CATALOG,
+        config=CONFIG,
+        settings=FakeSettings(),
+    )
+    try:
+        widget.project_select_box.setCurrentIndex(1)
+
+        widget.on_refresh_projects()
+
+        assert calls == [
+            (widget.settings, CONFIG, False),
+            (widget.settings, CONFIG, True),
+        ]
+        assert widget.project_select_box.count() == 3
+        assert widget.project_select_box.currentText() == "Project B"
+        assert widget.selectedProject == "project-b"
+        assert widget.run_select_box.count() == 2
+        assert widget.run_select_box.currentText() == "Run 2"
+        assert widget.selectedRun == "Run 2"
+        assert "Projects list refreshed." in widget.context_box.toPlainText()
+    finally:
+        widget.close()
+
+
+def test_refresh_projects_failure_keeps_existing_selection(qapp, monkeypatch):
+    FakeMessageBox.warning_calls = []
+    calls = []
+
+    def fake_init_projects(settings, config, force_refresh=False):
+        calls.append((settings, config, force_refresh))
+        if len(calls) == 1:
+            return [
+                {
+                    "name": "Project A",
+                    "slug": "project-a",
+                    "runs": [{"label": "Run 1"}],
+                }
+            ]
+        raise ProjectLoadingError("Failed to connect to Euphrosyne server.")
+
+    monkeypatch.setattr(data_upload_module, "init_projects", fake_init_projects)
+    monkeypatch.setattr(data_upload_module, "QMessageBox", FakeMessageBox)
+    monkeypatch.setattr(
+        data_upload_module, "load_refresh_token", lambda settings: "refresh-token"
+    )
+    widget = DataUploadWidget(
+        config_catalog=CONFIG_CATALOG,
+        config=CONFIG,
+        settings=FakeSettings(),
+    )
+    try:
+        widget.on_refresh_projects()
+
+        assert widget.project_select_box.count() == 1
+        assert widget.project_select_box.currentText() == "Project A"
+        assert widget.selectedProject == "project-a"
+        assert widget.selectedRun == "Run 1"
+        assert len(FakeMessageBox.warning_calls) == 1
+        assert FakeMessageBox.warning_calls[0][1] == "Projects unavailable"
+        assert (
+            "Could not refresh projects: Failed to connect to Euphrosyne server."
+            in widget.context_box.toPlainText()
+        )
     finally:
         widget.close()
 

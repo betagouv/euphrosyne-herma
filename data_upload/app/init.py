@@ -1,5 +1,6 @@
 import sys
 
+import httpx
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -11,6 +12,7 @@ from data_upload.euphrosyne.auth import (
     load_refresh_token,
     refresh_token,
 )
+from data_upload.euphrosyne.project import Project, ProjectLoadingError, list_projects
 
 
 def init_azcopy(app: QApplication):
@@ -60,3 +62,18 @@ def init_access_token(settings: QSettings, config: Config):
         login_required = True
 
     return login_required
+
+
+def init_projects(
+    settings: QSettings, config: Config, force_refresh: bool = False
+) -> list[Project]:
+    if force_refresh:
+        list_projects.cache_clear()
+
+    try:
+        return list_projects(
+            host=config["euphrosyne"]["url"],
+            access_token=settings.value("access_token"),
+        )
+    except httpx.HTTPError as e:
+        raise ProjectLoadingError(str(e)) from e

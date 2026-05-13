@@ -1,6 +1,5 @@
 import sys
 
-import httpx
 import sentry_sdk
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QIcon
@@ -14,14 +13,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from data_upload.app.init import init_access_token, init_azcopy
+from data_upload.app.init import init_access_token, init_azcopy, init_projects
 from data_upload.app.login import login_user
 from data_upload.config import ENVIRONMENT_SETTING_KEY, load_config, resolve_config
-from data_upload.euphrosyne.project import (
-    ProjectLoadingError,
-    first_project_with_runs,
-    list_projects,
-)
+from data_upload.euphrosyne.project import ProjectLoadingError, first_project_with_runs
 from data_upload.utils import BUNDLE_DIR, IS_BUNDLED
 from data_upload.widget.data_upload import DataUploadWidget
 from data_upload.widget.text_edit_stream import TextEditStream
@@ -117,11 +112,8 @@ class ConverterGUI:
             startup_dialog.show_message("Loading projects...")
 
         try:
-            projects = list_projects(
-                host=config["euphrosyne"]["url"],
-                access_token=settings.value("access_token"),
-            )
-        except (ProjectLoadingError, httpx.HTTPError) as e:
+            projects = init_projects(settings, config)
+        except ProjectLoadingError as e:
             startup_dialog.close()
             QMessageBox.critical(
                 None,
@@ -149,6 +141,7 @@ class ConverterGUI:
             config=config,
             settings=settings,
             stdout_stream=stdout_stream,
+            projects=projects,
         )
 
         print("\nConfig:", config, "\n")
