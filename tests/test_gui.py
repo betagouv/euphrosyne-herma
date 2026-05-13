@@ -1,6 +1,5 @@
 import sys
 
-import httpx
 import pytest
 
 from data_upload import gui as gui_module
@@ -65,11 +64,14 @@ class FakeStartupDialog:
 class FakeDataUploadWidget:
     instances = []
 
-    def __init__(self, config_catalog, config, settings, stdout_stream=None):
+    def __init__(
+        self, config_catalog, config, settings, stdout_stream=None, projects=None
+    ):
         self.config_catalog = config_catalog
         self.config = config
         self.settings = settings
         self.stdout_stream = stdout_stream
+        self.projects = projects
         self.window_title = None
         self.show_count = 0
         FakeDataUploadWidget.instances.append(self)
@@ -121,12 +123,12 @@ def _patch_startup_dependencies(
     )
     monkeypatch.setattr(gui_module, "DataUploadWidget", FakeDataUploadWidget)
 
-    def fake_list_projects(host, access_token):
+    def fake_init_projects(settings, config, force_refresh=False):
         if isinstance(projects_or_error, Exception):
             raise projects_or_error
         return projects_or_error
 
-    monkeypatch.setattr(gui_module, "list_projects", fake_list_projects)
+    monkeypatch.setattr(gui_module, "init_projects", fake_init_projects)
 
 
 def test_startup_dialog_is_modeless_and_has_no_message_box_buttons(qapp):
@@ -163,6 +165,9 @@ def test_startup_feedback_is_shown_and_updated_before_main_window(qapp, monkeypa
     assert FakeStartupDialog.instances[0].close_count == 1
     assert FakeDataUploadWidget.instances[0].show_count == 1
     assert FakeDataUploadWidget.instances[0].config == DEFAULT_CONFIG
+    assert FakeDataUploadWidget.instances[0].projects == [
+        {"name": "Project A", "slug": "project-a", "runs": [{"label": "Run 1"}]}
+    ]
 
 
 def test_startup_feedback_closes_before_login_and_reopens_after_success(
@@ -261,13 +266,7 @@ def test_startup_shows_critical_dialog_and_exits_when_project_api_fails(
 ):
     _patch_startup_dependencies(
         monkeypatch,
-        httpx.HTTPStatusError(
-            "server error",
-            request=httpx.Request(
-                "GET", "https://euphrosyne.example/api/lab/projects/"
-            ),
-            response=httpx.Response(500),
-        ),
+        ProjectLoadingError("server error"),
     )
 
     with pytest.raises(SystemExit) as exit_info:

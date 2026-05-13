@@ -1,4 +1,4 @@
-from PySide6.QtCore import QSettings, Qt, QThread, Slot
+from PySide6.QtCore import QSettings, QSize, Qt, QThread, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QStyle,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from data_upload.app.azcopy import ProcessWorker
+from data_upload.app.init import init_projects
 from data_upload.app.login import login_user
 from data_upload.config import Config, ConfigCatalog
 from data_upload.euphro_tools import (
@@ -31,8 +33,8 @@ from data_upload.euphrosyne.auth import (
 )
 from data_upload.euphrosyne.project import (
     Project,
+    ProjectLoadingError,
     first_project_with_runs,
-    list_projects,
 )
 from data_upload.widget.data_location import DataLocationInputLayout
 from data_upload.widget.data_type import DataTypeCheckboxesLayout
@@ -52,6 +54,7 @@ class DataUploadWidget(QWidget):
         config: Config,
         settings: QSettings,
         stdout_stream: TextEditStream | None = None,
+        projects: list[Project] | None = None,
     ):
         super().__init__()
         self.setObjectName("DataUploadWidget")
@@ -77,9 +80,10 @@ class DataUploadWidget(QWidget):
 
         self.tools_service = self._build_tools_service()
 
-        self.projects = projects = list_projects(
-            host=self.config["euphrosyne"]["url"],
-            access_token=settings.value("access_token"),
+        self.projects = projects = (
+            projects
+            if projects is not None
+            else init_projects(self.settings, self.config)
         )
         initial_project = first_project_with_runs(projects)
         self.selectedProject = (
@@ -96,6 +100,14 @@ class DataUploadWidget(QWidget):
         self.start_button.setDisabled(True)
         self.logout_button = QPushButton("Sign out")
         self.logout_button.setObjectName("DangerButton")
+        self.refresh_projects_button = QPushButton()
+        self.refresh_projects_button.setObjectName("RefreshButton")
+        self.refresh_projects_button.setIcon(
+            QApplication.style().standardIcon(QStyle.SP_BrowserReload)
+        )
+        self.refresh_projects_button.setIconSize(QSize(18, 18))
+        self.refresh_projects_button.setToolTip("Refresh projects")
+        self.refresh_projects_button.setAccessibleName("Refresh projects")
 
         def _generate_q_combo_box(items: list[str], placeholder: str):
             combo_box = QComboBox()
@@ -155,7 +167,11 @@ class DataUploadWidget(QWidget):
         form_layout.setHorizontalSpacing(16)
         form_layout.setVerticalSpacing(12)
         form_layout.addWidget(project_label, 0, 0)
-        form_layout.addWidget(self.project_select_box, 0, 1)
+        project_input_layout = QHBoxLayout()
+        project_input_layout.setSpacing(8)
+        project_input_layout.addWidget(self.project_select_box, 1)
+        project_input_layout.addWidget(self.refresh_projects_button)
+        form_layout.addLayout(project_input_layout, 0, 1)
         form_layout.addWidget(run_label, 1, 0)
         form_layout.addWidget(self.run_select_box, 1, 1)
         form_layout.addWidget(data_type_label, 2, 0)
@@ -202,6 +218,7 @@ class DataUploadWidget(QWidget):
 
         self.start_button.clicked.connect(self.on_start)
         self.logout_button.clicked.connect(self.on_logout)
+        self.refresh_projects_button.clicked.connect(self.on_refresh_projects)
         self._validate_form()
 
     def _build_header(self) -> QHBoxLayout:
@@ -251,6 +268,65 @@ class DataUploadWidget(QWidget):
         completer.setFilterMode(Qt.MatchContains)
         completer.setCompletionMode(QCompleter.PopupCompletion)
         self.project_select_box.setCompleter(completer)
+
+    @Slot()
+    def on_refresh_projects(self):
+        self.refresh_projects_button.setEnabled(False)
+        self._set_status(
+            "Refreshing projects",
+            "Loading the latest project and run list from Euphrosyne.",
+        )
+
+        try:
+            projects = init_projects(self.settings, self.config, force_refresh=True)
+        except ProjectLoadingError as e:
+            QMessageBox.warning(
+                self,
+                "Projects unavailable",
+                f"Could not refresh projects from Euphrosyne: {e}",
+            )
+            self.context_box.append(f"Could not refresh projects: {e}")
+            self._validate_form()
+            self._sync_start_button()
+            return
+
+        self._apply_projects(projects)
+        self.context_box.append("Projects list refreshed.")
+        self._sync_start_button()
+
+    def _apply_projects(self, projects: list[Project]):
+        current_project_slug = self.selectedProject
+        self.projects = projects
+        selected_index = next(
+            (
+                index
+                for index, project in enumerate(projects)
+                if project["slug"] == current_project_slug
+            ),
+            -1,
+        )
+
+        if selected_index < 0:
+            selected_project = first_project_with_runs(projects) or (
+                projects[0] if projects else None
+            )
+            selected_index = (
+                projects.index(selected_project) if selected_project else -1
+            )
+
+        self.project_select_box.blockSignals(True)
+        try:
+            self.project_select_box.clear()
+            self.project_select_box.addItems([project["name"] for project in projects])
+            self.project_select_box.setCurrentIndex(selected_index)
+        finally:
+            self.project_select_box.blockSignals(False)
+
+        if self.project_select_box.completer():
+            self.project_select_box.completer().setModel(
+                self.project_select_box.model()
+            )
+        self._select_project_at_index(selected_index)
 
     @Slot()
     def on_logout(self):
@@ -428,9 +504,10 @@ class DataUploadWidget(QWidget):
 
         project = self.projects[index]
         self.selectedProject = project["slug"]
-        self.run_select_box.addItems([run["label"] for run in project["runs"]])
+        run_labels = [run["label"] for run in project["runs"]]
+        self.run_select_box.addItems(run_labels)
 
-        if project["runs"]:
+        if run_labels:
             self.run_select_box.setCurrentIndex(0)
             self.selectedRun = self.run_select_box.currentText()
             self._validate_form()
@@ -492,6 +569,8 @@ class DataUploadWidget(QWidget):
         self.start_button.setEnabled(
             self._is_form_valid and not self._upload_in_progress
         )
+        if hasattr(self, "refresh_projects_button"):
+            self.refresh_projects_button.setEnabled(not self._upload_in_progress)
 
     @property
     def _is_form_valid(self) -> bool:

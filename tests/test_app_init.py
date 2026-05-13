@@ -1,5 +1,21 @@
+import httpx
+import pytest
+
 from data_upload import azcopy as azcopy_module
 from data_upload.app import init as init_module
+from data_upload.euphrosyne.project import ProjectLoadingError
+
+CONFIG = {
+    "euphrosyne": {"url": "https://euphrosyne.example"},
+}
+
+
+class FakeSettings:
+    def __init__(self):
+        self.values = {"access_token": "access-token"}
+
+    def value(self, key, default=None):
+        return self.values.get(key, default)
 
 
 class FakeProgressDialog:
@@ -66,3 +82,59 @@ def test_init_azcopy_uses_writable_app_data_path_for_bundled_macos(
     assert download_calls[0] != bundle_dir / "bin" / "azcopy" / "azcopy"
     assert len(FakeProgressDialog.instances) == 1
     assert FakeProgressDialog.instances[0].close_count == 1
+
+
+def test_init_projects_uses_configured_host_and_access_token(monkeypatch):
+    calls = []
+
+    def fake_list_projects(host, access_token):
+        calls.append((host, access_token))
+        return [{"name": "Project A", "slug": "project-a", "runs": []}]
+
+    fake_list_projects.cache_clear = lambda: None
+    monkeypatch.setattr(init_module, "list_projects", fake_list_projects)
+
+    projects = init_module.init_projects(FakeSettings(), CONFIG)
+
+    assert projects == [{"name": "Project A", "slug": "project-a", "runs": []}]
+    assert calls == [("https://euphrosyne.example", "access-token")]
+
+
+def test_init_projects_clears_project_cache_when_force_refreshing(monkeypatch):
+    cache_clears = []
+
+    def fake_list_projects(host, access_token):
+        return []
+
+    fake_list_projects.cache_clear = lambda: cache_clears.append(True)
+    monkeypatch.setattr(init_module, "list_projects", fake_list_projects)
+
+    init_module.init_projects(FakeSettings(), CONFIG, force_refresh=True)
+
+    assert cache_clears == [True]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ProjectLoadingError("Projects response must be a list."),
+        httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request(
+                "GET", "https://euphrosyne.example/api/lab/projects/"
+            ),
+            response=httpx.Response(500),
+        ),
+    ],
+)
+def test_init_projects_raises_project_loading_errors(monkeypatch, error):
+    def fake_list_projects(host, access_token):
+        raise error
+
+    fake_list_projects.cache_clear = lambda: None
+    monkeypatch.setattr(init_module, "list_projects", fake_list_projects)
+
+    with pytest.raises(ProjectLoadingError) as exc_info:
+        init_module.init_projects(FakeSettings(), CONFIG)
+
+    assert str(error) in str(exc_info.value)

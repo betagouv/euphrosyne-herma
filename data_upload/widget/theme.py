@@ -115,6 +115,14 @@ QPushButton:disabled {
     color: #998d82;
 }
 
+QPushButton#RefreshButton {
+    min-height: 32px;
+    max-height: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0;
+}
+
 QPushButton#PrimaryButton {
     background: #8f5d25;
     border-color: #8f5d25;
