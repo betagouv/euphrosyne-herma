@@ -109,10 +109,10 @@ default-environment: euphrosyne
 environments:
   euphrosyne:
     url: "https://euphrosyne.beta.gouv.fr"
-    euphro-tools-url: "https://euphrosyne-tools-api-production.osc-secnum-fr1.scalingo.io"
+    euphro-tools-url: "https://tools.euphrosyne.beta.gouv.fr"
   euphrosyne-staging:
-    url: "https://euphrosyne.beta.gouv.fr"
-    euphro-tools-url: "https://euphrosyne-tools-api-staging.osc-fr1.scalingo.io"
+    url: "https://euphrosyne.incubateur.net"
+    euphro-tools-url: "https://tools.euphrosyne.incubateur.net"
 ```
 
 Settings are automatically saved using Qt's QSettings system under the "Euphrosyne" organization and "Herma" application name.
