@@ -65,6 +65,30 @@ def test_is_token_expired_treats_missing_exp_as_not_expired():
     assert is_token_expired(token) is False
 
 
+def test_is_token_expired_decodes_base64url_payload():
+    payload = {
+        "exp": (datetime.now(timezone.utc) + timedelta(minutes=1)).timestamp(),
+        "jti": "???>>>",
+    }
+    encoded_payload = (
+        base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8"))
+        .decode("ascii")
+        .rstrip("=")
+    )
+    assert "_" in encoded_payload or "-" in encoded_payload
+
+    assert is_token_expired(f"header.{encoded_payload}.signature") is False
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["not-a-jwt", "header..signature", "header.!!!.signature", "a.b.c.d"],
+)
+def test_is_token_expired_rejects_malformed_token(token):
+    with pytest.raises(ValueError):
+        is_token_expired(token)
+
+
 def test_euphrosyne_login_returns_access_and_refresh_tokens(httpx_mock):
     httpx_mock.add_response(
         method="POST",

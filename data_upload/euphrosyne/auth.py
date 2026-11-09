@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 from datetime import datetime, timezone
 
@@ -68,18 +69,42 @@ def clear_tokens(settings: QSettings):
     settings.remove("refresh_token")
 
 
+def decode_jwt_payload(token: str) -> dict:
+    """
+    Decode the payload of a JWT without verifying its signature.
+
+    Raises:
+        ValueError: If the token is not a well-formed JWT.
+    """
+    parts = token.split(".")
+    if len(parts) != 3 or not all(parts):
+        raise ValueError("Token is not a JWT.")
+    payload_segment = parts[1]
+    padding = "=" * (-len(payload_segment) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload_segment + padding)
+        payload = json.loads(decoded.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, ValueError) as error:
+        raise ValueError("Token payload cannot be decoded.") from error
+    if not isinstance(payload, dict):
+        raise ValueError("Token payload is not a JSON object.")
+    return payload
+
+
 def is_token_expired(token: str) -> bool:
     """
-    Check if the provided JWT is valid.
+    Check whether the provided JWT is expired.
 
     Args:
-        token (str): The JWT to validate.
+        token (str): The JWT to check.
 
     Returns:
-        bool: True if the JWT is valid, False otherwise.
+        bool: True if the JWT has an expiration date in the past, False otherwise.
+
+    Raises:
+        ValueError: If the token is not a well-formed JWT.
     """
-    decoded = base64.b64decode(token.split(".")[1] + "==").decode("utf-8")
-    expiration = json.loads(decoded).get("exp")
+    expiration = decode_jwt_payload(token).get("exp")
 
     if not expiration:
         return False
