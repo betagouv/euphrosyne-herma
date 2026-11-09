@@ -11,6 +11,7 @@ from data_upload.euphrosyne.auth import (
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
+    EuphrosyneLoginThrottledError,
     EuphrosyneTokenLoginRequiredError,
     InvalidHermaTokenError,
     clear_tokens,
@@ -129,7 +130,7 @@ def test_euphrosyne_login_returns_none_on_auth_failure(httpx_mock):
     )
 
 
-@pytest.mark.parametrize("status_code", [401, 400, 429, 500])
+@pytest.mark.parametrize("status_code", [401, 400, 500])
 def test_euphrosyne_login_returns_none_on_generic_failures(httpx_mock, status_code):
     httpx_mock.add_response(
         method="POST",
@@ -144,12 +145,12 @@ def test_euphrosyne_login_returns_none_on_generic_failures(httpx_mock, status_co
     )
 
 
-def test_euphrosyne_login_requires_token_on_forbidden(httpx_mock):
+def test_euphrosyne_login_requires_token_on_herma_token_required_code(httpx_mock):
     httpx_mock.add_response(
         method="POST",
         url="https://euphrosyne.example/api/auth/long-token/",
         status_code=403,
-        text="forbidden",
+        json={"detail": "Use a Herma token.", "code": "herma_token_required"},
     )
 
     with pytest.raises(EuphrosyneTokenLoginRequiredError):
@@ -157,23 +158,60 @@ def test_euphrosyne_login_requires_token_on_forbidden(httpx_mock):
 
 
 @pytest.mark.parametrize(
-    "body",
+    "status_code,response_kwargs",
     [
-        {"detail": "MFA required: use a Herma token."},
-        {"code": "herma_token_required", "detail": "Use the Herma token page."},
-        {"errors": [{"message": "Double authentification obligatoire"}]},
+        (403, {"text": "forbidden"}),
+        (403, {"json": {"detail": "MFA required", "code": "permission_denied"}}),
+        (403, {"json": ["herma_token_required"]}),
+        (401, {"json": {"detail": "x", "code": "herma_token_required"}}),
+        (401, {"json": {"detail": "MFA required: use a Herma token."}}),
     ],
 )
-def test_euphrosyne_login_requires_token_on_unauthorized_mfa_hint(httpx_mock, body):
+def test_euphrosyne_login_other_refusals_are_generic_failures(
+    httpx_mock, status_code, response_kwargs
+):
     httpx_mock.add_response(
         method="POST",
         url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=401,
-        json=body,
+        status_code=status_code,
+        **response_kwargs,
     )
 
-    with pytest.raises(EuphrosyneTokenLoginRequiredError):
-        euphrosyne_login("https://euphrosyne.example", "admin@example.com", "secret")
+    assert (
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+        is None
+    )
+
+
+def test_euphrosyne_login_throttled_uses_server_detail(httpx_mock):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+        status_code=429,
+        json={"detail": "Account locked for 15 minutes."},
+    )
+
+    with pytest.raises(
+        EuphrosyneLoginThrottledError, match="^Account locked for 15 minutes.$"
+    ):
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+
+
+@pytest.mark.parametrize(
+    "response_kwargs", [{"text": "Too Many Requests"}, {"json": {"detail": ""}}]
+)
+def test_euphrosyne_login_throttled_without_detail_uses_default_message(
+    httpx_mock, response_kwargs
+):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+        status_code=429,
+        **response_kwargs,
+    )
+
+    with pytest.raises(EuphrosyneLoginThrottledError, match="Too many login attempts"):
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
 
 
 def test_euphrosyne_login_returns_none_on_unexpected_success_body(httpx_mock):
@@ -198,6 +236,25 @@ def test_euphrosyne_login_wraps_connection_errors(httpx_mock):
 
     with pytest.raises(EuphrosyneConnectionError):
         euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ReadTimeout("timeout"),
+        httpx.RemoteProtocolError("protocol"),
+        httpx.TooManyRedirects("redirects"),
+    ],
+)
+def test_auth_network_calls_wrap_http_errors(httpx_mock, error):
+    httpx_mock.add_exception(error, is_reusable=True)
+
+    with pytest.raises(EuphrosyneConnectionError):
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+    with pytest.raises(EuphrosyneConnectionError):
+        refresh_token("https://euphrosyne.example", "refresh-token")
+    with pytest.raises(EuphrosyneConnectionError):
+        login_with_herma_token("https://euphrosyne.example", _refresh_jwt())
 
 
 def test_get_herma_token_url():

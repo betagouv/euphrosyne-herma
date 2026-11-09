@@ -11,6 +11,7 @@ from data_upload.config import (
 )
 from data_upload.euphrosyne.auth import (
     EuphrosyneConnectionError,
+    EuphrosyneLoginThrottledError,
     EuphrosyneTokenLoginRequiredError,
     InvalidHermaTokenError,
     euphrosyne_login,
@@ -75,6 +76,9 @@ def login_user(
                 "Euphrosyne, then paste it in Herma.",
             )
             login_mode = LOGIN_MODE_TOKEN
+            continue
+        except EuphrosyneLoginThrottledError as error:
+            _show_error("Login Failed", str(error))
             continue
         except InvalidHermaTokenError as error:
             _show_error("Invalid Herma token", str(error))

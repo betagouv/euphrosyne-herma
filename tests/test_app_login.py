@@ -4,6 +4,7 @@ from data_upload.app import login as login_module
 from data_upload.config import resolve_config
 from data_upload.euphrosyne.auth import (
     EuphrosyneConnectionError,
+    EuphrosyneLoginThrottledError,
     EuphrosyneTokenLoginRequiredError,
     InvalidHermaTokenError,
 )
@@ -256,3 +257,22 @@ def test_login_user_keeps_environment_locked_during_relogin(monkeypatch, fakes):
     )
 
     assert FakeLoginDialog.instances[0].kwargs["allow_environment_change"] is False
+
+
+def test_login_user_shows_throttling_detail(monkeypatch, fakes):
+    FakeLoginDialog.submissions = [_password_submission(), None]
+
+    def throttled(host, email, password):
+        raise EuphrosyneLoginThrottledError("Account locked for 15 minutes.")
+
+    monkeypatch.setattr(login_module, "euphrosyne_login", throttled)
+
+    with pytest.raises(SystemExit):
+        login_module.login_user(
+            CONFIG, resolve_config(CONFIG, "euphrosyne"), FakeSettings()
+        )
+
+    assert FakeMessageBox.messages == [
+        ("Login Failed", "Account locked for 15 minutes.")
+    ]
+    assert fakes == []
