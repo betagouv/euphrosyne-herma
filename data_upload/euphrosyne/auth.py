@@ -10,6 +10,21 @@ from PySide6.QtCore import QSettings
 
 KEYRING_SERVICE = "Euphrosyne Herma"
 KEYRING_REFRESH_TOKEN_ACCOUNT = "refresh_token"
+HERMA_TOKEN_PATH = "/herma-token/"
+
+# Hints looked for in a refused password login response to detect accounts
+# that must use a Herma token (e.g. lab administrators with mandatory MFA).
+_TOKEN_LOGIN_REQUIRED_HINTS = (
+    "herma",
+    "mfa",
+    "2fa",
+    "otp",
+    "multi-factor",
+    "multifactor",
+    "two-factor",
+    "double authentification",
+    "authentification forte",
+)
 
 
 class EuphrosyneConnectionError(Exception):
@@ -23,6 +38,20 @@ class EuphrosyneConnectionError(Exception):
 
 class EuphrosyneAuthenticationError(Exception):
     """Raised when the user must authenticate again."""
+
+
+class EuphrosyneTokenLoginRequiredError(EuphrosyneAuthenticationError):
+    """Raised when the server refuses password login and requires a Herma token."""
+
+    def __init__(self):
+        super().__init__(
+            "Password login is not allowed for this account. "
+            "Generate a Herma token on Euphrosyne and log in by pasting it."
+        )
+
+
+class InvalidHermaTokenError(EuphrosyneAuthenticationError):
+    """Raised when a pasted Herma token is malformed, expired or rejected."""
 
 
 def _capture_keyring_warning(operation: str, error: Exception):
@@ -111,7 +140,44 @@ def is_token_expired(token: str) -> bool:
     return expiration < datetime.now(timezone.utc).timestamp()
 
 
-def euphrosyne_login(host: str, email: str, password: str) -> tuple[str, str]:
+def get_herma_token_url(host: str) -> str:
+    """Return the Euphrosyne page where users generate a Herma token."""
+    return f"{host.rstrip('/')}{HERMA_TOKEN_PATH}"
+
+
+def _response_text_hints(response: httpx.Response) -> str:
+    """Collect string values of an error response, lowercased, for hint matching."""
+    try:
+        data = response.json()
+    except ValueError:
+        return response.text.lower()
+
+    values: list[str] = []
+
+    def collect(value):
+        if isinstance(value, str):
+            values.append(value)
+        elif isinstance(value, dict):
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(data)
+    return " ".join(values).lower()
+
+
+def _is_token_login_required(response: httpx.Response) -> bool:
+    if response.status_code == 403:
+        return True
+    if response.status_code == 401:
+        text = _response_text_hints(response)
+        return any(hint in text for hint in _TOKEN_LOGIN_REQUIRED_HINTS)
+    return False
+
+
+def euphrosyne_login(host: str, email: str, password: str) -> tuple[str, str] | None:
     """
     Log in a user and return a access & refresh token pair.
     Args:
@@ -119,18 +185,108 @@ def euphrosyne_login(host: str, email: str, password: str) -> tuple[str, str]:
         email (str): The user's email.
         password (str): The user's password.
     Returns:
-        tuple[str, str]: The access and refresh tokens if login is successful.
+        tuple[str, str] | None: The access and refresh tokens if login is
+        successful, None otherwise.
     Raises:
-        ValueError: If the login fails.
+        EuphrosyneTokenLoginRequiredError: If the server refuses password login
+            for this account (e.g. administrators with mandatory MFA).
+        EuphrosyneConnectionError: If the server cannot be reached.
     """
-    response = httpx.post(
-        f"{host}/api/auth/long-token/",
-        json={"email": email, "password": password},
-    )
-    if not response.status_code == 200:
+    try:
+        response = httpx.post(
+            f"{host}/api/auth/long-token/",
+            json={"email": email, "password": password},
+        )
+    except httpx.TransportError as e:
+        raise EuphrosyneConnectionError() from e
+    if response.status_code != 200:
+        if _is_token_login_required(response):
+            raise EuphrosyneTokenLoginRequiredError()
         return None
-    data = response.json()
-    return (data["access"], data["refresh"])
+    try:
+        data = response.json()
+        return (data["access"], data["refresh"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def normalize_herma_token(raw_token: str) -> str:
+    """
+    Clean up a pasted Herma token and check it looks like a valid refresh token.
+
+    Whitespace (including line breaks introduced when copying) and surrounding
+    quotes are removed.
+
+    Raises:
+        InvalidHermaTokenError: If the token is malformed, not a refresh token
+            or expired.
+    """
+    token = "".join((raw_token or "").split()).strip("\"'")
+    if not token:
+        raise InvalidHermaTokenError("Please paste a Herma token.")
+    try:
+        payload = decode_jwt_payload(token)
+        expired = is_token_expired(token)
+    except (ValueError, TypeError) as e:
+        raise InvalidHermaTokenError(
+            "This does not look like a Herma token. "
+            "Copy the whole token generated on Euphrosyne and try again."
+        ) from e
+    token_type = payload.get("token_type")
+    if token_type is not None and token_type != "refresh":
+        raise InvalidHermaTokenError(
+            "This token cannot be used to log in to Herma. "
+            "Generate a Herma token on Euphrosyne and paste it."
+        )
+    if expired:
+        raise InvalidHermaTokenError(
+            "This Herma token has expired. Generate a new one on Euphrosyne."
+        )
+    return token
+
+
+def login_with_herma_token(host: str, raw_token: str) -> tuple[str, str]:
+    """
+    Log in with a Herma token (a refresh token generated on Euphrosyne).
+
+    Args:
+        host (str): The base URL of the authentication server.
+        raw_token (str): The token as pasted by the user.
+    Returns:
+        tuple[str, str]: The access token and the refresh token to store.
+    Raises:
+        InvalidHermaTokenError: If the token is malformed, expired or rejected.
+        EuphrosyneConnectionError: If the server cannot be reached.
+    """
+    token = normalize_herma_token(raw_token)
+    try:
+        response = httpx.post(
+            f"{host}/api/auth/token/refresh/",
+            json={"refresh": token},
+        )
+    except httpx.TransportError as e:
+        raise EuphrosyneConnectionError() from e
+    if response.status_code != 200:
+        raise InvalidHermaTokenError(
+            "Euphrosyne rejected this Herma token. It may be invalid, revoked "
+            "or for another environment. Generate a new one and try again."
+        )
+    try:
+        data = response.json()
+    except ValueError as e:
+        raise InvalidHermaTokenError(
+            "Authentication server returned an invalid response."
+        ) from e
+    access_token = data.get("access") if isinstance(data, dict) else None
+    if not isinstance(access_token, str) or not access_token:
+        raise InvalidHermaTokenError(
+            "Authentication server did not return an access token."
+        )
+    # Keep a rotated refresh token if the server returns one.
+    new_refresh_token = data.get("refresh")
+    if not isinstance(new_refresh_token, str) or not new_refresh_token:
+        new_refresh_token = token
+    return access_token, new_refresh_token
 
 
 def refresh_token(host: str, refresh_token: str) -> tuple[str, str]:

@@ -11,10 +11,15 @@ from data_upload.euphrosyne.auth import (
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
+    EuphrosyneTokenLoginRequiredError,
+    InvalidHermaTokenError,
     clear_tokens,
     euphrosyne_login,
+    get_herma_token_url,
     is_token_expired,
     load_refresh_token,
+    login_with_herma_token,
+    normalize_herma_token,
     refresh_token,
     save_refresh_token,
 )
@@ -122,6 +127,213 @@ def test_euphrosyne_login_returns_none_on_auth_failure(httpx_mock):
         )
         is None
     )
+
+
+@pytest.mark.parametrize("status_code", [401, 400, 429, 500])
+def test_euphrosyne_login_returns_none_on_generic_failures(httpx_mock, status_code):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+        status_code=status_code,
+        text="<html>unexpected</html>",
+    )
+
+    assert (
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+        is None
+    )
+
+
+def test_euphrosyne_login_requires_token_on_forbidden(httpx_mock):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+        status_code=403,
+        text="forbidden",
+    )
+
+    with pytest.raises(EuphrosyneTokenLoginRequiredError):
+        euphrosyne_login("https://euphrosyne.example", "admin@example.com", "secret")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"detail": "MFA required: use a Herma token."},
+        {"code": "herma_token_required", "detail": "Use the Herma token page."},
+        {"errors": [{"message": "Double authentification obligatoire"}]},
+    ],
+)
+def test_euphrosyne_login_requires_token_on_unauthorized_mfa_hint(httpx_mock, body):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+        status_code=401,
+        json=body,
+    )
+
+    with pytest.raises(EuphrosyneTokenLoginRequiredError):
+        euphrosyne_login("https://euphrosyne.example", "admin@example.com", "secret")
+
+
+def test_euphrosyne_login_returns_none_on_unexpected_success_body(httpx_mock):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+        json={"unexpected": True},
+    )
+
+    assert (
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+        is None
+    )
+
+
+def test_euphrosyne_login_wraps_connection_errors(httpx_mock):
+    httpx_mock.add_exception(
+        httpx.ConnectError("connection failed"),
+        method="POST",
+        url="https://euphrosyne.example/api/auth/long-token/",
+    )
+
+    with pytest.raises(EuphrosyneConnectionError):
+        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
+
+
+def test_get_herma_token_url():
+    assert (
+        get_herma_token_url("https://euphrosyne.example/")
+        == "https://euphrosyne.example/herma-token/"
+    )
+    assert (
+        get_herma_token_url("https://euphrosyne.example")
+        == "https://euphrosyne.example/herma-token/"
+    )
+
+
+def _refresh_jwt(**overrides) -> str:
+    payload = {
+        "token_type": "refresh",
+        "exp": (datetime.now(timezone.utc) + timedelta(days=30)).timestamp(),
+        "jti": "abc",
+        "user_id": 1,
+    }
+    payload.update(overrides)
+    return _jwt_with_payload(payload)
+
+
+def test_normalize_herma_token_trims_whitespace_and_quotes():
+    token = _refresh_jwt()
+    pasted = f'  "{token[:20]}\n{token[20:]}"\n'
+
+    assert normalize_herma_token(pasted) == token
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "not-a-token", "a.b", "a.!!!.c"])
+def test_normalize_herma_token_rejects_malformed_input(raw):
+    with pytest.raises(InvalidHermaTokenError):
+        normalize_herma_token(raw)
+
+
+def test_normalize_herma_token_rejects_expired_token():
+    token = _refresh_jwt(
+        exp=(datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+    )
+
+    with pytest.raises(InvalidHermaTokenError, match="expired"):
+        normalize_herma_token(token)
+
+
+def test_normalize_herma_token_rejects_access_token():
+    with pytest.raises(InvalidHermaTokenError):
+        normalize_herma_token(_refresh_jwt(token_type="access"))
+
+
+def test_login_with_herma_token_returns_access_and_pasted_refresh(httpx_mock):
+    token = _refresh_jwt()
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/token/refresh/",
+        json={"access": "new-access-token"},
+    )
+
+    tokens = login_with_herma_token("https://euphrosyne.example", f" {token}\n")
+
+    assert tokens == ("new-access-token", token)
+    request = httpx_mock.get_request()
+    assert json.loads(request.content) == {"refresh": token}
+
+
+def test_login_with_herma_token_keeps_rotated_refresh_token(httpx_mock):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/token/refresh/",
+        json={"access": "new-access-token", "refresh": "rotated-refresh-token"},
+    )
+
+    assert login_with_herma_token("https://euphrosyne.example", _refresh_jwt()) == (
+        "new-access-token",
+        "rotated-refresh-token",
+    )
+
+
+def test_login_with_herma_token_does_not_call_server_for_invalid_token(httpx_mock):
+    with pytest.raises(InvalidHermaTokenError):
+        login_with_herma_token("https://euphrosyne.example", "garbage")
+
+    assert httpx_mock.get_requests() == []
+
+
+@pytest.mark.parametrize(
+    "response_kwargs",
+    [
+        {"status_code": 401, "json": {"detail": "Token is blacklisted"}},
+        {"status_code": 400, "text": "bad request"},
+        {"status_code": 500, "text": "oops"},
+        {"status_code": 200, "text": "not json"},
+        {"status_code": 200, "json": {"detail": "no access"}},
+    ],
+)
+def test_login_with_herma_token_raises_on_rejected_token(httpx_mock, response_kwargs):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/token/refresh/",
+        **response_kwargs,
+    )
+
+    with pytest.raises(InvalidHermaTokenError):
+        login_with_herma_token("https://euphrosyne.example", _refresh_jwt())
+
+
+def test_login_with_herma_token_wraps_connection_errors(httpx_mock):
+    httpx_mock.add_exception(
+        httpx.ConnectError("connection failed"),
+        method="POST",
+        url="https://euphrosyne.example/api/auth/token/refresh/",
+    )
+
+    with pytest.raises(EuphrosyneConnectionError):
+        login_with_herma_token("https://euphrosyne.example", _refresh_jwt())
+
+
+def test_herma_token_errors_never_contain_the_token(httpx_mock):
+    token = _refresh_jwt(
+        exp=(datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+    )
+    with pytest.raises(InvalidHermaTokenError) as error_info:
+        login_with_herma_token("https://euphrosyne.example", token)
+    assert token not in str(error_info.value)
+
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/api/auth/token/refresh/",
+        status_code=401,
+        json={"detail": "Token is invalid"},
+    )
+    valid_token = _refresh_jwt()
+    with pytest.raises(InvalidHermaTokenError) as error_info:
+        login_with_herma_token("https://euphrosyne.example", valid_token)
+    assert valid_token not in str(error_info.value)
 
 
 def test_refresh_token_returns_new_access_token(httpx_mock):
