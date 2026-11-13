@@ -62,7 +62,7 @@ python -m data_upload.gui
 2. If authentication is required, a login dialog will appear
 3. Select the target environment, click "Open the Herma token page", log in on
    Euphrosyne (administrators use two-factor authentication), generate a Herma
-   token, then copy and paste it in the dialog. The token is valid for 30 days.
+   token, then copy and paste it in the dialog.
 4. The main data upload interface will open
 
 ### Using the Interface
@@ -95,7 +95,7 @@ Supported data types are:
 
 `--data-path` must point to an existing local directory.
 
-Herma no longer accepts an email and password. The CLI prints the address of the
+The CLI prints the address of the
 Herma token page of the selected environment (`<Euphrosyne URL>/herma-token/`)
 and asks for a Herma token through a hidden prompt. Generate the token on that
 page, then paste it. The token is never accepted as a command-line argument, so

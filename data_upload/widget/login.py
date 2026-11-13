@@ -89,7 +89,7 @@ class LoginDialog(QtWidgets.QDialog):
         explanation = QtWidgets.QLabel(
             "Open the Herma token page on Euphrosyne and log in there "
             "(administrators use two-factor authentication). Generate a token, "
-            "copy it and paste it below. The token is valid for 30 days."
+            "copy it and paste it below."
         )
         explanation.setObjectName("FieldHint")
         explanation.setWordWrap(True)

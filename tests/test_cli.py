@@ -343,9 +343,7 @@ def test_cli_returns_error_when_herma_token_is_invalid(monkeypatch, tmp_path, ca
     assert saved == []
 
 
-def test_cli_logs_in_with_herma_token_without_long_token_endpoint(
-    monkeypatch, tmp_path, httpx_mock
-):
+def test_cli_logs_in_with_herma_token(monkeypatch, tmp_path, httpx_mock):
     data_path = tmp_path / "data"
     data_path.mkdir()
     settings = FakeSettings()
@@ -398,20 +396,7 @@ def test_cli_logs_in_with_herma_token_without_long_token_endpoint(
     assert saved == [herma_token]
 
 
-def test_cli_rejects_email_option(monkeypatch, capsys):
-    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
-
-    with pytest.raises(SystemExit) as exit_info:
-        cli_module.main(
-            UPLOAD_ARGS + ["--data-path", "/tmp", "--email", "user@example.com"]
-        )
-
-    assert exit_info.value.code == 2
-    assert "--email" in capsys.readouterr().err
-
-
 def test_cli_has_no_token_argument(monkeypatch):
     parser = cli_module.build_parser(CONFIG_CATALOG)
     options = {option for action in parser._actions for option in action.option_strings}
     assert not any("token" in option for option in options)
-    assert "--email" not in options

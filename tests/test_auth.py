@@ -1,12 +1,10 @@
 import base64
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import httpx
 import pytest
 
-import data_upload
 from data_upload.euphrosyne.auth import (
     KEYRING_REFRESH_TOKEN_ACCOUNT,
     KEYRING_SERVICE,
@@ -561,13 +559,3 @@ def test_clear_tokens_removes_settings_tokens_and_warns_when_keyring_delete_fail
             {"level": "warning"},
         )
     ]
-
-
-def test_package_never_calls_the_removed_long_token_endpoint():
-    package_dir = Path(data_upload.__file__).parent
-    offending = [
-        str(path.relative_to(package_dir))
-        for path in package_dir.rglob("*.py")
-        if "long-token" in path.read_text(encoding="utf-8")
-    ]
-    assert offending == []

@@ -83,7 +83,7 @@ def _login(config, settings: QSettings) -> tuple[str, str]:
     # The token is only read from a hidden prompt, never from the command line,
     # so that it does not end up in the shell history or the process list.
     print(
-        "Generate a Herma token on Euphrosyne (valid 30 days), copy it and "
+        "Generate a Herma token on Euphrosyne, copy it and "
         f"paste it below: {get_herma_token_url(host)}",
         file=sys.stderr,
     )

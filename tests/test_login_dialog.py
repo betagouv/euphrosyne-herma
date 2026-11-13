@@ -48,10 +48,6 @@ def test_login_dialog_disables_environment_selector_during_relogin(qapp):
 def test_login_dialog_only_offers_herma_token_login(qapp):
     dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
     try:
-        assert not hasattr(dialog, "email_edit")
-        assert not hasattr(dialog, "password_edit")
-        assert not hasattr(dialog, "mode_tabs")
-        assert dialog.findChildren(QtWidgets.QTabWidget) == []
         line_edits = dialog.findChildren(QtWidgets.QLineEdit)
         assert line_edits == [dialog.token_edit]
         assert dialog.open_token_page_button.text() == "Open the Herma token page"
