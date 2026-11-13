@@ -10,9 +10,6 @@ from data_upload.config import (
 )
 from data_upload.euphrosyne.auth import get_herma_token_url
 
-LOGIN_MODE_PASSWORD = "password"
-LOGIN_MODE_TOKEN = "token"
-
 
 class LoginDialog(QtWidgets.QDialog):
     def __init__(
@@ -20,8 +17,6 @@ class LoginDialog(QtWidgets.QDialog):
         config: ConfigCatalog,
         selected_environment: str,
         allow_environment_change: bool = True,
-        login_mode: str = LOGIN_MODE_PASSWORD,
-        email: str = "",
     ):
         super().__init__()
         self.config = config
@@ -35,7 +30,7 @@ class LoginDialog(QtWidgets.QDialog):
         title = QtWidgets.QLabel("Log in to Euphrosyne")
         title.setObjectName("DialogTitle")
         subtitle = QtWidgets.QLabel(
-            "Log in with your Euphrosyne credentials, or paste a Herma token."
+            "Herma logs in with a Herma token generated on Euphrosyne."
         )
         subtitle.setObjectName("Subtitle")
         subtitle.setWordWrap(True)
@@ -62,10 +57,7 @@ class LoginDialog(QtWidgets.QDialog):
         environment_layout.addRow(environment_label, self.environment_select)
         layout.addLayout(environment_layout)
 
-        self.mode_tabs = QtWidgets.QTabWidget()
-        self.mode_tabs.addTab(self._build_password_tab(email), "Email and password")
-        self.mode_tabs.addTab(self._build_token_tab(), "Paste a Herma token")
-        layout.addWidget(self.mode_tabs)
+        self._build_token_section(layout)
 
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addStretch()
@@ -80,13 +72,8 @@ class LoginDialog(QtWidgets.QDialog):
 
         self.ok_button.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.reject)
-        self.email_edit.textChanged.connect(self._validate_credentials)
-        self.password_edit.textChanged.connect(self._validate_credentials)
         self.token_edit.textChanged.connect(self._validate_credentials)
-        self.mode_tabs.currentChanged.connect(self._validate_credentials)
         self.open_token_page_button.clicked.connect(self.open_herma_token_page)
-
-        self.set_login_mode(login_mode)
 
     @staticmethod
     def _build_form_layout() -> QtWidgets.QFormLayout:
@@ -98,59 +85,21 @@ class LoginDialog(QtWidgets.QDialog):
         form_layout.setHorizontalSpacing(14)
         return form_layout
 
-    def _build_password_tab(self, email: str) -> QtWidgets.QWidget:
-        tab = QtWidgets.QWidget()
-        form_layout = self._build_form_layout()
-        form_layout.setContentsMargins(12, 12, 12, 12)
-
-        email_label = QtWidgets.QLabel("Email")
-        email_label.setObjectName("FieldLabel")
-        self.email_edit = QtWidgets.QLineEdit()
-        self.email_edit.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
-        self.email_edit.setMinimumWidth(300)
-        self.email_edit.setPlaceholderText("name@example.com")
-        self.email_edit.setText(email)
-        email_label.setBuddy(self.email_edit)
-        form_layout.addRow(email_label, self.email_edit)
-
-        password_label = QtWidgets.QLabel("Password")
-        password_label.setObjectName("FieldLabel")
-        self.password_edit = QtWidgets.QLineEdit()
-        self.password_edit.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
-        self.password_edit.setMinimumWidth(300)
-        self.password_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.password_edit.setPlaceholderText("Enter your password")
-        password_label.setBuddy(self.password_edit)
-        form_layout.addRow(password_label, self.password_edit)
-
-        tab.setLayout(form_layout)
-        return tab
-
-    def _build_token_tab(self) -> QtWidgets.QWidget:
-        tab = QtWidgets.QWidget()
-        tab_layout = QtWidgets.QVBoxLayout(tab)
-        tab_layout.setContentsMargins(12, 12, 12, 12)
-        tab_layout.setSpacing(10)
-
+    def _build_token_section(self, layout: QtWidgets.QVBoxLayout):
         explanation = QtWidgets.QLabel(
-            "Lab administrators must use a Herma token. Open the Herma token "
-            "page on Euphrosyne, log in with two-factor authentication, "
-            "generate a token, then copy and paste it below. "
-            "The token is valid for 30 days."
+            "Open the Herma token page on Euphrosyne and log in there "
+            "(administrators use two-factor authentication). Generate a token, "
+            "copy it and paste it below. The token is valid for 30 days."
         )
         explanation.setObjectName("FieldHint")
         explanation.setWordWrap(True)
-        tab_layout.addWidget(explanation)
+        layout.addWidget(explanation)
 
         self.open_token_page_button = QtWidgets.QPushButton("Open the Herma token page")
         page_button_layout = QtWidgets.QHBoxLayout()
         page_button_layout.addWidget(self.open_token_page_button)
         page_button_layout.addStretch()
-        tab_layout.addLayout(page_button_layout)
+        layout.addLayout(page_button_layout)
 
         token_layout = self._build_form_layout()
         token_label = QtWidgets.QLabel("Herma token")
@@ -164,28 +113,7 @@ class LoginDialog(QtWidgets.QDialog):
         self.token_edit.setPlaceholderText("Paste your Herma token")
         token_label.setBuddy(self.token_edit)
         token_layout.addRow(token_label, self.token_edit)
-        tab_layout.addLayout(token_layout)
-        tab_layout.addStretch()
-        return tab
-
-    def get_login_mode(self) -> str:
-        if self.mode_tabs.currentIndex() == 1:
-            return LOGIN_MODE_TOKEN
-        return LOGIN_MODE_PASSWORD
-
-    def set_login_mode(self, login_mode: str):
-        self.mode_tabs.setCurrentIndex(1 if login_mode == LOGIN_MODE_TOKEN else 0)
-        self._validate_credentials()
-
-    def get_credentials(self):
-        return self.email_edit.text(), self.password_edit.text()
-
-    def get_login_data(self):
-        return (
-            self.environment_select.currentData(),
-            self.email_edit.text(),
-            self.password_edit.text(),
-        )
+        layout.addLayout(token_layout)
 
     def get_token_login_data(self):
         return self.environment_select.currentData(), self.token_edit.text()
@@ -200,9 +128,4 @@ class LoginDialog(QtWidgets.QDialog):
         QDesktopServices.openUrl(QUrl(self.get_herma_token_url()))
 
     def _validate_credentials(self, *_args):
-        if self.get_login_mode() == LOGIN_MODE_TOKEN:
-            self.ok_button.setEnabled(bool(self.token_edit.text().strip()))
-            return
-        self.ok_button.setEnabled(
-            bool(self.email_edit.text().strip() and self.password_edit.text())
-        )
+        self.ok_button.setEnabled(bool(self.token_edit.text().strip()))

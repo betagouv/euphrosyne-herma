@@ -5,7 +5,7 @@ import sys
 logger = logging.getLogger(__name__)
 
 
-CLI_UPLOAD_ARGS = {"--project", "--run", "--data-type", "--data-path", "--email"}
+CLI_UPLOAD_ARGS = {"--project", "--run", "--data-type", "--data-path"}
 
 
 def build_parser() -> argparse.ArgumentParser:

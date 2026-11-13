@@ -24,7 +24,9 @@ from data_upload.euphrosyne.auth import (
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
-    euphrosyne_login,
+    InvalidHermaTokenError,
+    get_herma_token_url,
+    login_with_herma_token,
     save_refresh_token,
 )
 
@@ -58,7 +60,6 @@ def build_parser(config_catalog: ConfigCatalog) -> argparse.ArgumentParser:
         choices=list_environment_keys(config_catalog),
         help="Target environment (defaults to the configured default environment)",
     )
-    parser.add_argument("--email", help="Euphrosyne account email")
     parser.add_argument("--log", default="INFO", help="Log level (default: INFO)")
     return parser
 
@@ -77,22 +78,24 @@ def _validate_data_path(data_path: str) -> Path:
     return path
 
 
-def _login(config, settings: QSettings, email: str | None) -> tuple[str, str]:
-    if not email:
-        email = input("Email: ")
-    password = getpass.getpass("Password: ")
-
-    tokens = euphrosyne_login(
-        host=config["euphrosyne"]["url"],
-        email=email,
-        password=password,
+def _login(config, settings: QSettings) -> tuple[str, str]:
+    host = config["euphrosyne"]["url"]
+    # The token is only read from a hidden prompt, never from the command line,
+    # so that it does not end up in the shell history or the process list.
+    print(
+        "Generate a Herma token on Euphrosyne (valid 30 days), copy it and "
+        f"paste it below: {get_herma_token_url(host)}",
+        file=sys.stderr,
     )
-    if tokens is None:
-        raise EuphrosyneAuthenticationError(
-            "Login failed. Please check your credentials."
-        )
+    raw_token = getpass.getpass("Herma token: ")
 
-    access_token, refresh_token = tokens
+    try:
+        access_token, refresh_token = login_with_herma_token(
+            host=host, raw_token=raw_token
+        )
+    except InvalidHermaTokenError as error:
+        raise EuphrosyneAuthenticationError(f"Login failed. {error}") from error
+
     settings.setValue("access_token", access_token)
     save_refresh_token(settings, refresh_token)
     return access_token, refresh_token
@@ -109,7 +112,7 @@ def run_upload(args: argparse.Namespace, config_catalog: ConfigCatalog) -> int:
     data_path = _validate_data_path(args.data_path)
     config = resolve_config(config_catalog, args.environment)
     settings = QSettings("Euphrosyne", "Herma")
-    access_token, refresh_token = _login(config, settings, args.email)
+    access_token, refresh_token = _login(config, settings)
     _ensure_azcopy_installed()
 
     tools_service = EuphrosyneToolsService(

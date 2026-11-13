@@ -1,21 +1,20 @@
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 import pytest
 
+import data_upload
 from data_upload.euphrosyne.auth import (
     KEYRING_REFRESH_TOKEN_ACCOUNT,
     KEYRING_SERVICE,
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
-    EuphrosyneLoginThrottledError,
-    EuphrosyneTokenLoginRequiredError,
     InvalidHermaTokenError,
     clear_tokens,
-    euphrosyne_login,
     get_herma_token_url,
     is_token_expired,
     load_refresh_token,
@@ -95,149 +94,6 @@ def test_is_token_expired_rejects_malformed_token(token):
         is_token_expired(token)
 
 
-def test_euphrosyne_login_returns_access_and_refresh_tokens(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        json={"access": "access-token", "refresh": "refresh-token"},
-    )
-
-    tokens = euphrosyne_login(
-        "https://euphrosyne.example", "user@example.com", "secret"
-    )
-
-    assert tokens == ("access-token", "refresh-token")
-    request = httpx_mock.get_request()
-    assert json.loads(request.content) == {
-        "email": "user@example.com",
-        "password": "secret",
-    }
-
-
-def test_euphrosyne_login_returns_none_on_auth_failure(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=401,
-        json={"detail": "invalid credentials"},
-    )
-
-    assert (
-        euphrosyne_login(
-            "https://euphrosyne.example", "user@example.com", "bad-password"
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize("status_code", [401, 400, 500])
-def test_euphrosyne_login_returns_none_on_generic_failures(httpx_mock, status_code):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=status_code,
-        text="<html>unexpected</html>",
-    )
-
-    assert (
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
-        is None
-    )
-
-
-def test_euphrosyne_login_requires_token_on_herma_token_required_code(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=403,
-        json={"detail": "Use a Herma token.", "code": "herma_token_required"},
-    )
-
-    with pytest.raises(EuphrosyneTokenLoginRequiredError):
-        euphrosyne_login("https://euphrosyne.example", "admin@example.com", "secret")
-
-
-@pytest.mark.parametrize(
-    "status_code,response_kwargs",
-    [
-        (403, {"text": "forbidden"}),
-        (403, {"json": {"detail": "MFA required", "code": "permission_denied"}}),
-        (403, {"json": ["herma_token_required"]}),
-        (401, {"json": {"detail": "x", "code": "herma_token_required"}}),
-        (401, {"json": {"detail": "MFA required: use a Herma token."}}),
-    ],
-)
-def test_euphrosyne_login_other_refusals_are_generic_failures(
-    httpx_mock, status_code, response_kwargs
-):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=status_code,
-        **response_kwargs,
-    )
-
-    assert (
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
-        is None
-    )
-
-
-def test_euphrosyne_login_throttled_uses_server_detail(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=429,
-        json={"detail": "Account locked for 15 minutes."},
-    )
-
-    with pytest.raises(
-        EuphrosyneLoginThrottledError, match="^Account locked for 15 minutes.$"
-    ):
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
-
-
-@pytest.mark.parametrize(
-    "response_kwargs", [{"text": "Too Many Requests"}, {"json": {"detail": ""}}]
-)
-def test_euphrosyne_login_throttled_without_detail_uses_default_message(
-    httpx_mock, response_kwargs
-):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        status_code=429,
-        **response_kwargs,
-    )
-
-    with pytest.raises(EuphrosyneLoginThrottledError, match="Too many login attempts"):
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
-
-
-def test_euphrosyne_login_returns_none_on_unexpected_success_body(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-        json={"unexpected": True},
-    )
-
-    assert (
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
-        is None
-    )
-
-
-def test_euphrosyne_login_wraps_connection_errors(httpx_mock):
-    httpx_mock.add_exception(
-        httpx.ConnectError("connection failed"),
-        method="POST",
-        url="https://euphrosyne.example/api/auth/long-token/",
-    )
-
-    with pytest.raises(EuphrosyneConnectionError):
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
-
-
 @pytest.mark.parametrize(
     "error",
     [
@@ -249,8 +105,6 @@ def test_euphrosyne_login_wraps_connection_errors(httpx_mock):
 def test_auth_network_calls_wrap_http_errors(httpx_mock, error):
     httpx_mock.add_exception(error, is_reusable=True)
 
-    with pytest.raises(EuphrosyneConnectionError):
-        euphrosyne_login("https://euphrosyne.example", "user@example.com", "secret")
     with pytest.raises(EuphrosyneConnectionError):
         refresh_token("https://euphrosyne.example", "refresh-token")
     with pytest.raises(EuphrosyneConnectionError):
@@ -707,3 +561,13 @@ def test_clear_tokens_removes_settings_tokens_and_warns_when_keyring_delete_fail
             {"level": "warning"},
         )
     ]
+
+
+def test_package_never_calls_the_removed_long_token_endpoint():
+    package_dir = Path(data_upload.__file__).parent
+    offending = [
+        str(path.relative_to(package_dir))
+        for path in package_dir.rglob("*.py")
+        if "long-token" in path.read_text(encoding="utf-8")
+    ]
+    assert offending == []

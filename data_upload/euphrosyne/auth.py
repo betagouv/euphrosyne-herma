@@ -12,10 +12,6 @@ KEYRING_SERVICE = "Euphrosyne Herma"
 KEYRING_REFRESH_TOKEN_ACCOUNT = "refresh_token"
 HERMA_TOKEN_PATH = "/herma-token/"
 
-# Error code returned by Euphrosyne (HTTP 403) when an account, such as a lab
-# administrator with mandatory MFA, must log in with a Herma token.
-HERMA_TOKEN_REQUIRED_CODE = "herma_token_required"
-
 
 class EuphrosyneConnectionError(Exception):
     """Custom exception for Euphrosyne connection errors."""
@@ -28,26 +24,6 @@ class EuphrosyneConnectionError(Exception):
 
 class EuphrosyneAuthenticationError(Exception):
     """Raised when the user must authenticate again."""
-
-
-class EuphrosyneTokenLoginRequiredError(EuphrosyneAuthenticationError):
-    """Raised when the server refuses password login and requires a Herma token."""
-
-    def __init__(self):
-        super().__init__(
-            "Password login is not allowed for this account. "
-            "Generate a Herma token on Euphrosyne and log in by pasting it."
-        )
-
-
-class EuphrosyneLoginThrottledError(EuphrosyneAuthenticationError):
-    """Raised when the server refuses login after too many attempts (HTTP 429)."""
-
-    def __init__(self, message: str | None = None):
-        super().__init__(
-            message
-            or "Too many login attempts. Please wait a few minutes and try again."
-        )
 
 
 class InvalidHermaTokenError(EuphrosyneAuthenticationError):
@@ -143,64 +119,6 @@ def is_token_expired(token: str) -> bool:
 def get_herma_token_url(host: str) -> str:
     """Return the Euphrosyne page where users generate a Herma token."""
     return f"{host.rstrip('/')}{HERMA_TOKEN_PATH}"
-
-
-def _response_json(response: httpx.Response):
-    try:
-        return response.json()
-    except ValueError:
-        return None
-
-
-def _is_token_login_required(response: httpx.Response) -> bool:
-    if response.status_code != 403:
-        return False
-    data = _response_json(response)
-    return isinstance(data, dict) and data.get("code") == HERMA_TOKEN_REQUIRED_CODE
-
-
-def _throttled_error(response: httpx.Response) -> "EuphrosyneLoginThrottledError":
-    data = _response_json(response)
-    detail = data.get("detail") if isinstance(data, dict) else None
-    if isinstance(detail, str) and detail.strip():
-        return EuphrosyneLoginThrottledError(detail.strip())
-    return EuphrosyneLoginThrottledError()
-
-
-def euphrosyne_login(host: str, email: str, password: str) -> tuple[str, str] | None:
-    """
-    Log in a user and return a access & refresh token pair.
-    Args:
-        host (str): The base URL of the authentication server.
-        email (str): The user's email.
-        password (str): The user's password.
-    Returns:
-        tuple[str, str] | None: The access and refresh tokens if login is
-        successful, None otherwise.
-    Raises:
-        EuphrosyneTokenLoginRequiredError: If the server refuses password login
-            for this account (e.g. administrators with mandatory MFA).
-        EuphrosyneLoginThrottledError: If too many login attempts were made.
-        EuphrosyneConnectionError: If the server cannot be reached.
-    """
-    try:
-        response = httpx.post(
-            f"{host}/api/auth/long-token/",
-            json={"email": email, "password": password},
-        )
-    except httpx.HTTPError as e:
-        raise EuphrosyneConnectionError() from e
-    if response.status_code != 200:
-        if _is_token_login_required(response):
-            raise EuphrosyneTokenLoginRequiredError()
-        if response.status_code == 429:
-            raise _throttled_error(response)
-        return None
-    try:
-        data = response.json()
-        return (data["access"], data["refresh"])
-    except (ValueError, KeyError, TypeError):
-        return None
 
 
 def normalize_herma_token(raw_token: str) -> str:

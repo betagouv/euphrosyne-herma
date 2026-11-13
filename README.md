@@ -60,7 +60,9 @@ python -m data_upload.gui
 
 1. The application will automatically initialize AzCopy
 2. If authentication is required, a login dialog will appear
-3. Select the target environment and enter your Euphrosyne credentials
+3. Select the target environment, click "Open the Herma token page", log in on
+   Euphrosyne (administrators use two-factor authentication), generate a Herma
+   token, then copy and paste it in the dialog. The token is valid for 30 days.
 4. The main data upload interface will open
 
 ### Using the Interface
@@ -83,8 +85,7 @@ python -m data_upload.main \
   --run "Run 1" \
   --data-type raw-data \
   --data-path /path/to/data \
-  --environment euphrosyne \
-  --email user@example.com
+  --environment euphrosyne
 ```
 
 Supported data types are:
@@ -92,11 +93,15 @@ Supported data types are:
 - `raw-data`
 - `processed-data`
 
-`--data-path` must point to an existing local directory. If `--email` is omitted,
-the CLI prompts for it. The password is always entered through a hidden prompt and
-is never accepted as a command-line argument.
+`--data-path` must point to an existing local directory.
 
-The CLI logs in with the provided credentials, stores refreshed tokens using the
+Herma no longer accepts an email and password. The CLI prints the address of the
+Herma token page of the selected environment (`<Euphrosyne URL>/herma-token/`)
+and asks for a Herma token through a hidden prompt. Generate the token on that
+page, then paste it. The token is never accepted as a command-line argument, so
+that it does not end up in the shell history or the process list.
+
+The CLI logs in with the pasted Herma token, stores refreshed tokens using the
 same Qt settings/keyring helpers as the GUI, initializes the project/run folders,
 fetches the upload SAS token, and runs AzCopy synchronously.
 
