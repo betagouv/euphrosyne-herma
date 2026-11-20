@@ -96,11 +96,16 @@ def test_login_dialog_herma_token_url_follows_selected_environment(qapp, monkeyp
     )
     dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
     try:
-        assert dialog.get_herma_token_url() == "https://euphrosyne.example/herma-token/"
+        assert (
+            dialog.get_herma_token_url()
+            == "https://euphrosyne.example/accounts/token/herma/"
+        )
 
         dialog.environment_select.setCurrentIndex(1)
         dialog.open_token_page_button.click()
 
-        assert opened_urls == ["https://staging.euphrosyne.example/herma-token/"]
+        assert opened_urls == [
+            "https://staging.euphrosyne.example/accounts/token/herma/"
+        ]
     finally:
         dialog.close()

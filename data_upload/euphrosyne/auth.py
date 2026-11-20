@@ -10,7 +10,7 @@ from PySide6.QtCore import QSettings
 
 KEYRING_SERVICE = "Euphrosyne Herma"
 KEYRING_REFRESH_TOKEN_ACCOUNT = "refresh_token"
-HERMA_TOKEN_PATH = "/herma-token/"
+HERMA_TOKEN_PATH = "/accounts/token/herma/"
 
 
 class EuphrosyneConnectionError(Exception):

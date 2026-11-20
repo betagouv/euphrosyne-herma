@@ -96,7 +96,7 @@ Supported data types are:
 `--data-path` must point to an existing local directory.
 
 The CLI prints the address of the
-Herma token page of the selected environment (`<Euphrosyne URL>/herma-token/`)
+Herma token page of the selected environment (`<Euphrosyne URL>/accounts/token/herma/`)
 and asks for a Herma token through a hidden prompt. Generate the token on that
 page, then paste it. The token is never accepted as a command-line argument, so
 that it does not end up in the shell history or the process list.

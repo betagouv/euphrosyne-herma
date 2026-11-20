@@ -112,11 +112,11 @@ def test_auth_network_calls_wrap_http_errors(httpx_mock, error):
 def test_get_herma_token_url():
     assert (
         get_herma_token_url("https://euphrosyne.example/")
-        == "https://euphrosyne.example/herma-token/"
+        == "https://euphrosyne.example/accounts/token/herma/"
     )
     assert (
         get_herma_token_url("https://euphrosyne.example")
-        == "https://euphrosyne.example/herma-token/"
+        == "https://euphrosyne.example/accounts/token/herma/"
     )
 
 

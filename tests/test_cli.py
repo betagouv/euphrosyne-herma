@@ -312,7 +312,7 @@ def test_cli_prints_herma_token_page_before_prompting(monkeypatch, tmp_path, cap
     assert len(events) == 1
     _, prompt, hint = events[0]
     assert prompt == "Herma token: "
-    assert "https://staging.euphrosyne.example/herma-token/" in hint
+    assert "https://staging.euphrosyne.example/accounts/token/herma/" in hint
 
 
 def test_cli_returns_error_when_herma_token_is_invalid(monkeypatch, tmp_path, capsys):
