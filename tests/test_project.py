@@ -27,7 +27,7 @@ def test_list_projects_returns_projects_and_sends_bearer_token(httpx_mock):
     ]
     httpx_mock.add_response(
         method="GET",
-        url="https://euphrosyne.example/api/lab/projects/",
+        url="https://euphrosyne.example/api/lab/projects/?lifecycle_state=HOT",
         json=expected_projects,
     )
 
@@ -42,7 +42,7 @@ def test_list_projects_returns_projects_and_sends_bearer_token(httpx_mock):
 def test_list_projects_caches_by_host_and_access_token(httpx_mock):
     httpx_mock.add_response(
         method="GET",
-        url="https://euphrosyne.example/api/lab/projects/",
+        url="https://euphrosyne.example/api/lab/projects/?lifecycle_state=HOT",
         json=[],
     )
 
@@ -55,7 +55,7 @@ def test_list_projects_caches_by_host_and_access_token(httpx_mock):
 def test_list_projects_raises_for_non_200_responses(httpx_mock):
     httpx_mock.add_response(
         method="GET",
-        url="https://euphrosyne.example/api/lab/projects/",
+        url="https://euphrosyne.example/api/lab/projects/?lifecycle_state=HOT",
         status_code=500,
         json={"detail": "server error"},
     )
@@ -68,7 +68,7 @@ def test_list_projects_wraps_connection_errors(httpx_mock):
     httpx_mock.add_exception(
         httpx.ConnectError("connection failed"),
         method="GET",
-        url="https://euphrosyne.example/api/lab/projects/",
+        url="https://euphrosyne.example/api/lab/projects/?lifecycle_state=HOT",
     )
 
     with pytest.raises(ProjectLoadingError, match="Failed to connect"):
@@ -89,7 +89,7 @@ def test_list_projects_raises_for_malformed_project_payloads(
 ):
     httpx_mock.add_response(
         method="GET",
-        url="https://euphrosyne.example/api/lab/projects/",
+        url="https://euphrosyne.example/api/lab/projects/?lifecycle_state=HOT",
         json=payload,
     )
 
@@ -100,7 +100,7 @@ def test_list_projects_raises_for_malformed_project_payloads(
 def test_list_projects_raises_for_invalid_json(httpx_mock):
     httpx_mock.add_response(
         method="GET",
-        url="https://euphrosyne.example/api/lab/projects/",
+        url="https://euphrosyne.example/api/lab/projects/?lifecycle_state=HOT",
         text="not json",
     )
 

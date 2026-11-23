@@ -67,6 +67,8 @@ def list_projects(host: str, access_token: str) -> list[Project]:
     try:
         response = httpx.get(
             f"{host}/api/lab/projects/",
+            # Only HOT projects accept data uploads.
+            params={"lifecycle_state": "HOT"},
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
