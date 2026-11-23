@@ -1,5 +1,8 @@
+import html
+import time
+
 from PySide6 import QtWidgets
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 
 from data_upload.config import (
@@ -8,7 +11,14 @@ from data_upload.config import (
     list_environment_keys,
     resolve_config,
 )
-from data_upload.euphrosyne.auth import get_herma_token_url
+from data_upload.euphrosyne.auth import (
+    AuthorizationPending,
+    DeviceAuthorization,
+    EuphrosyneAuthenticationError,
+    EuphrosyneConnectionError,
+    poll_device_token,
+    start_device_authorization,
+)
 
 
 class LoginDialog(QtWidgets.QDialog):
@@ -30,7 +40,8 @@ class LoginDialog(QtWidgets.QDialog):
         title = QtWidgets.QLabel("Log in to Euphrosyne")
         title.setObjectName("DialogTitle")
         subtitle = QtWidgets.QLabel(
-            "Herma logs in with a Herma token generated on Euphrosyne."
+            "Herma opens Euphrosyne in your browser: sign in there and confirm "
+            "the code shown below. Only lab administrators can use Herma."
         )
         subtitle.setObjectName("Subtitle")
         subtitle.setWordWrap(True)
@@ -52,28 +63,34 @@ class LoginDialog(QtWidgets.QDialog):
         current_index = self.environment_select.findData(selected_environment)
         if current_index >= 0:
             self.environment_select.setCurrentIndex(current_index)
+        self._allow_environment_change = allow_environment_change
         self.environment_select.setEnabled(allow_environment_change)
         environment_label.setBuddy(self.environment_select)
         environment_layout.addRow(environment_label, self.environment_select)
         layout.addLayout(environment_layout)
 
-        self._build_token_section(layout)
+        self._build_code_section(layout)
 
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addStretch()
         self.cancel_button = QtWidgets.QPushButton("Cancel")
-        self.ok_button = QtWidgets.QPushButton("Log in")
+        self.ok_button = QtWidgets.QPushButton("Sign in with Euphrosyne")
         self.ok_button.setObjectName("PrimaryButton")
         self.ok_button.setDefault(True)
-        self.ok_button.setDisabled(True)
         button_layout.addWidget(self.cancel_button)
         button_layout.addWidget(self.ok_button)
         layout.addLayout(button_layout)
 
-        self.ok_button.clicked.connect(self.accept)
+        self.ok_button.clicked.connect(self.start_sign_in)
         self.cancel_button.clicked.connect(self.reject)
-        self.token_edit.textChanged.connect(self._validate_credentials)
-        self.open_token_page_button.clicked.connect(self.open_herma_token_page)
+
+        self._authorization: DeviceAuthorization | None = None
+        self._deadline = 0.0
+        self._interval = 0
+        self._result: tuple[str, str, str] | None = None
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setSingleShot(True)
+        self._poll_timer.timeout.connect(self.poll)
 
     @staticmethod
     def _build_form_layout() -> QtWidgets.QFormLayout:
@@ -85,47 +102,91 @@ class LoginDialog(QtWidgets.QDialog):
         form_layout.setHorizontalSpacing(14)
         return form_layout
 
-    def _build_token_section(self, layout: QtWidgets.QVBoxLayout):
-        explanation = QtWidgets.QLabel(
-            "Open the Herma token page on Euphrosyne and log in there "
-            "(administrators use two-factor authentication). Generate a token, "
-            "copy it and paste it below."
-        )
-        explanation.setObjectName("FieldHint")
-        explanation.setWordWrap(True)
-        layout.addWidget(explanation)
+    def _build_code_section(self, layout: QtWidgets.QVBoxLayout):
+        self.code_label = QtWidgets.QLabel()
+        self.code_label.setObjectName("DialogTitle")
+        self.code_label.setAlignment(Qt.AlignCenter)
+        self.code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.code_label.hide()
+        layout.addWidget(self.code_label)
 
-        self.open_token_page_button = QtWidgets.QPushButton("Open the Herma token page")
-        page_button_layout = QtWidgets.QHBoxLayout()
-        page_button_layout.addWidget(self.open_token_page_button)
-        page_button_layout.addStretch()
-        layout.addLayout(page_button_layout)
+        self.status_label = QtWidgets.QLabel()
+        self.status_label.setObjectName("FieldHint")
+        self.status_label.setWordWrap(True)
+        self.status_label.setOpenExternalLinks(True)
+        layout.addWidget(self.status_label)
 
-        token_layout = self._build_form_layout()
-        token_label = QtWidgets.QLabel("Herma token")
-        token_label.setObjectName("FieldLabel")
-        self.token_edit = QtWidgets.QLineEdit()
-        self.token_edit.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
-        self.token_edit.setMinimumWidth(300)
-        self.token_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.token_edit.setPlaceholderText("Paste your Herma token")
-        token_label.setBuddy(self.token_edit)
-        token_layout.addRow(token_label, self.token_edit)
-        layout.addLayout(token_layout)
-
-    def get_token_login_data(self):
-        return self.environment_select.currentData(), self.token_edit.text()
-
-    def get_herma_token_url(self) -> str:
+    def _host(self) -> str:
         selected_config = resolve_config(
             self.config, self.environment_select.currentData()
         )
-        return get_herma_token_url(selected_config["euphrosyne"]["url"])
+        return selected_config["euphrosyne"]["url"]
 
-    def open_herma_token_page(self):
-        QDesktopServices.openUrl(QUrl(self.get_herma_token_url()))
+    def start_sign_in(self):
+        try:
+            authorization = start_device_authorization(self._host())
+        except (EuphrosyneAuthenticationError, EuphrosyneConnectionError) as error:
+            self._fail(str(error))
+            return
+        self._authorization = authorization
+        self._interval = authorization.interval
+        self._deadline = time.monotonic() + authorization.expires_in
+        self.environment_select.setEnabled(False)
+        self.ok_button.setEnabled(False)
+        self.code_label.setText(authorization.user_code)
+        self.code_label.show()
+        url = authorization.verification_uri_complete
+        link = html.escape(url)
+        self.status_label.setText(
+            "Confirm this code on Euphrosyne, in the page opened in your "
+            f'browser. If it did not open, go to <a href="{link}">{link}</a>.'
+        )
+        QDesktopServices.openUrl(QUrl(url))
+        self._schedule_poll()
 
-    def _validate_credentials(self, *_args):
-        self.ok_button.setEnabled(bool(self.token_edit.text().strip()))
+    def _schedule_poll(self):
+        self._poll_timer.start(self._interval * 1000)
+
+    def poll(self):
+        if self._authorization is None:
+            return
+        try:
+            access_token, refresh_token = poll_device_token(
+                self._host(), self._authorization.device_code
+            )
+        except AuthorizationPending as pending:
+            if time.monotonic() > self._deadline:
+                self._fail("The sign-in code expired. Please try again.")
+                return
+            if pending.slow_down:
+                self._interval += 5
+            self._schedule_poll()
+            return
+        except (EuphrosyneAuthenticationError, EuphrosyneConnectionError) as error:
+            self._fail(str(error))
+            return
+        self._result = (
+            self.environment_select.currentData(),
+            access_token,
+            refresh_token,
+        )
+        self.accept()
+
+    def _fail(self, message: str):
+        self._poll_timer.stop()
+        self._authorization = None
+        self.code_label.hide()
+        self.status_label.setText(message)
+        self.environment_select.setEnabled(self._allow_environment_change)
+        self.ok_button.setText("Try again")
+        self.ok_button.setEnabled(True)
+
+    def get_login_result(self) -> tuple[str, str, str]:
+        """Return the environment, the access token and the refresh token."""
+        if self._result is None:
+            raise RuntimeError("The sign-in did not complete.")
+        return self._result
+
+    def reject(self):
+        self._poll_timer.stop()
+        super().reject()

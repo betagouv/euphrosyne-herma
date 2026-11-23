@@ -1,5 +1,12 @@
+import pytest
 from PySide6 import QtWidgets
 
+from data_upload.euphrosyne.auth import (
+    AuthorizationPending,
+    DeviceAuthorization,
+    DeviceAuthorizationError,
+    EuphrosyneConnectionError,
+)
 from data_upload.widget import login as login_module
 from data_upload.widget.login import LoginDialog
 
@@ -45,67 +52,159 @@ def test_login_dialog_disables_environment_selector_during_relogin(qapp):
         dialog.close()
 
 
-def test_login_dialog_only_offers_herma_token_login(qapp):
-    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
-    try:
-        line_edits = dialog.findChildren(QtWidgets.QLineEdit)
-        assert line_edits == [dialog.token_edit]
-        assert dialog.open_token_page_button.text() == "Open the Herma token page"
-        assert dialog.cancel_button.text() == "Cancel"
-    finally:
-        dialog.close()
+AUTHORIZATION = DeviceAuthorization(
+    device_code="device-code",
+    user_code="ABCD-EFGH",
+    verification_uri="https://staging.euphrosyne.example/identity/o/device",
+    verification_uri_complete=(
+        "https://staging.euphrosyne.example/identity/o/device?code=ABCD-EFGH"
+    ),
+    expires_in=300,
+    interval=5,
+)
 
 
-def test_login_button_requires_token(qapp):
-    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
-    try:
-        assert dialog.ok_button.text() == "Log in"
-        assert dialog.ok_button.isEnabled() is False
-
-        dialog.token_edit.setText("   ")
-        assert dialog.ok_button.isEnabled() is False
-
-        dialog.token_edit.setText("header.payload.signature")
-        assert dialog.ok_button.isEnabled() is True
-        assert dialog.token_edit.echoMode() == QtWidgets.QLineEdit.Password
-    finally:
-        dialog.close()
-
-
-def test_login_dialog_returns_selected_environment_and_token(qapp):
-    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
-    try:
-        dialog.environment_select.setCurrentIndex(1)
-        dialog.token_edit.setText("header.payload.signature")
-
-        assert dialog.get_token_login_data() == (
-            "euphrosyne-staging",
-            "header.payload.signature",
-        )
-    finally:
-        dialog.close()
-
-
-def test_login_dialog_herma_token_url_follows_selected_environment(qapp, monkeypatch):
+@pytest.fixture(name="device_flow")
+def device_flow_fixture(monkeypatch):
+    """Records calls to Euphrosyne and replays scripted poll results."""
     monkeypatch.delenv("EUPHROSYNE_URL", raising=False)
-    opened_urls = []
+    calls = {"start": [], "poll": [], "opened": [], "poll_results": []}
+
+    def start(host):
+        calls["start"].append(host)
+        return AUTHORIZATION
+
+    def poll(host, device_code):
+        calls["poll"].append((host, device_code))
+        result = calls["poll_results"].pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(login_module, "start_device_authorization", start)
+    monkeypatch.setattr(login_module, "poll_device_token", poll)
     monkeypatch.setattr(
         login_module.QDesktopServices,
         "openUrl",
-        lambda url: opened_urls.append(url.toString()),
+        lambda url: calls["opened"].append(url.toString()),
     )
+    return calls
+
+
+def test_login_dialog_offers_sign_in_with_euphrosyne_only(qapp):
     dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
     try:
-        assert (
-            dialog.get_herma_token_url()
-            == "https://euphrosyne.example/accounts/token/herma/"
-        )
-
-        dialog.environment_select.setCurrentIndex(1)
-        dialog.open_token_page_button.click()
-
-        assert opened_urls == [
-            "https://staging.euphrosyne.example/accounts/token/herma/"
-        ]
+        assert dialog.findChildren(QtWidgets.QLineEdit) == []
+        assert dialog.ok_button.text() == "Sign in with Euphrosyne"
+        assert dialog.ok_button.isEnabled() is True
+        assert dialog.cancel_button.text() == "Cancel"
+        assert dialog.code_label.isHidden()
     finally:
         dialog.close()
+
+
+def test_sign_in_shows_code_and_opens_euphrosyne(qapp, device_flow):
+    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
+    try:
+        dialog.environment_select.setCurrentIndex(1)
+        dialog.ok_button.click()
+
+        assert device_flow["start"] == ["https://staging.euphrosyne.example"]
+        assert device_flow["opened"] == [AUTHORIZATION.verification_uri_complete]
+        assert dialog.code_label.text() == "ABCD-EFGH"
+        assert not dialog.code_label.isHidden()
+        assert AUTHORIZATION.verification_uri_complete in dialog.status_label.text()
+        assert dialog.ok_button.isEnabled() is False
+        assert dialog.environment_select.isEnabled() is False
+        assert dialog._poll_timer.isActive()
+        assert dialog._poll_timer.interval() == 5000
+    finally:
+        dialog.reject()
+
+
+def test_sign_in_completes_when_the_code_is_confirmed(qapp, device_flow):
+    device_flow["poll_results"] = [
+        AuthorizationPending(),
+        AuthorizationPending(slow_down=True),
+        ("access", "refresh"),
+    ]
+    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
+    try:
+        dialog.ok_button.click()
+        dialog.poll()
+        dialog.poll()
+        assert dialog._poll_timer.interval() == 10000
+        dialog.poll()
+
+        assert dialog.result() == QtWidgets.QDialog.Accepted
+        assert dialog.get_login_result() == ("euphrosyne", "access", "refresh")
+        assert (
+            device_flow["poll"] == [("https://euphrosyne.example", "device-code")] * 3
+        )
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DeviceAuthorizationError("The sign-in was denied on Euphrosyne."),
+        EuphrosyneConnectionError(),
+    ],
+)
+def test_sign_in_failure_lets_the_user_try_again(qapp, device_flow, error):
+    device_flow["poll_results"] = [error]
+    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
+    try:
+        dialog.ok_button.click()
+        dialog.poll()
+
+        assert dialog.status_label.text() == str(error)
+        assert dialog.code_label.isHidden()
+        assert not dialog._poll_timer.isActive()
+        assert dialog.ok_button.text() == "Try again"
+        assert dialog.ok_button.isEnabled() is True
+        assert dialog.environment_select.isEnabled() is True
+        with pytest.raises(RuntimeError):
+            dialog.get_login_result()
+    finally:
+        dialog.close()
+
+
+def test_sign_in_reports_when_euphrosyne_is_unreachable(qapp, monkeypatch):
+    def fail(host):
+        raise EuphrosyneConnectionError()
+
+    monkeypatch.setattr(login_module, "start_device_authorization", fail)
+    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
+    try:
+        dialog.ok_button.click()
+
+        assert dialog.status_label.text() == str(EuphrosyneConnectionError())
+        assert dialog.ok_button.isEnabled() is True
+    finally:
+        dialog.close()
+
+
+def test_expired_code_stops_polling(qapp, device_flow, monkeypatch):
+    device_flow["poll_results"] = [AuthorizationPending()]
+    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
+    try:
+        dialog.ok_button.click()
+        monkeypatch.setattr(login_module.time, "monotonic", lambda: float("inf"))
+        dialog.poll()
+
+        assert "expired" in dialog.status_label.text()
+        assert not dialog._poll_timer.isActive()
+    finally:
+        dialog.close()
+
+
+def test_cancel_stops_polling(qapp, device_flow):
+    dialog = LoginDialog(config=CONFIG, selected_environment="euphrosyne")
+    dialog.ok_button.click()
+
+    dialog.cancel_button.click()
+
+    assert dialog.result() == QtWidgets.QDialog.Rejected
+    assert not dialog._poll_timer.isActive()

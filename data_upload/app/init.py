@@ -10,7 +10,8 @@ from data_upload.euphrosyne.auth import (
     EuphrosyneConnectionError,
     is_token_expired,
     load_refresh_token,
-    refresh_token,
+    refresh_tokens,
+    save_refresh_token,
 )
 from data_upload.euphrosyne.project import Project, ProjectLoadingError, list_projects
 
@@ -41,10 +42,10 @@ def init_access_token(settings: QSettings, config: Config):
 
     login_required = False
 
-    if access:
+    if access and refresh:
         if is_token_expired(access):
             try:
-                access = refresh_token(
+                tokens = refresh_tokens(
                     host=config["euphrosyne"]["url"], refresh_token=refresh
                 )
             except EuphrosyneConnectionError:
@@ -54,10 +55,12 @@ def init_access_token(settings: QSettings, config: Config):
                     "Failed to connect to Euphrosyne server. Please check your connection and try again.",
                 )
                 sys.exit(1)
-            if access is None:
+            if tokens is None:
                 login_required = True
             else:
+                access, refresh = tokens
                 settings.setValue("access_token", access)
+                save_refresh_token(settings, refresh)
     else:
         login_required = True
 

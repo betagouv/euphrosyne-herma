@@ -33,6 +33,7 @@ SENTRY_EXTRA_DENYLIST = [
     "access_token",
     "data",
     "decoded",
+    "device_code",
     "new_refresh_token",
     "payload",
     "raw_token",
