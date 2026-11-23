@@ -17,6 +17,9 @@ class FakeSettings:
     def value(self, key, default=None):
         return self.values.get(key, default)
 
+    def setValue(self, key, value):
+        self.values[key] = value
+
 
 class FakeProgressDialog:
     NoButton = 0
@@ -138,3 +141,52 @@ def test_init_projects_raises_project_loading_errors(monkeypatch, error):
         init_module.init_projects(FakeSettings(), CONFIG)
 
     assert str(error) in str(exc_info.value)
+
+
+def _startup_settings(monkeypatch, refresh_result):
+    settings = FakeSettings()
+    settings.setValue("access_token", "expired-access")
+    saved = []
+    refreshed = []
+    monkeypatch.setattr(init_module, "is_token_expired", lambda token: True)
+    monkeypatch.setattr(
+        init_module, "load_refresh_token", lambda settings: "refresh-token"
+    )
+    monkeypatch.setattr(
+        init_module,
+        "refresh_tokens",
+        lambda host, refresh_token: refreshed.append((host, refresh_token))
+        or refresh_result,
+    )
+    monkeypatch.setattr(
+        init_module, "save_refresh_token", lambda settings, token: saved.append(token)
+    )
+    return settings, saved, refreshed
+
+
+def test_init_access_token_keeps_the_rotated_refresh_token(monkeypatch):
+    settings, saved, refreshed = _startup_settings(
+        monkeypatch, ("new-access", "new-refresh")
+    )
+
+    assert init_module.init_access_token(settings, CONFIG) is False
+
+    assert refreshed == [(CONFIG["euphrosyne"]["url"], "refresh-token")]
+    assert settings.value("access_token") == "new-access"
+    assert saved == ["new-refresh"]
+
+
+def test_init_access_token_asks_to_sign_in_when_refresh_fails(monkeypatch):
+    settings, saved, _refreshed = _startup_settings(monkeypatch, None)
+
+    assert init_module.init_access_token(settings, CONFIG) is True
+
+    assert saved == []
+
+
+def test_init_access_token_asks_to_sign_in_without_refresh_token(monkeypatch):
+    settings = FakeSettings()
+    settings.setValue("access_token", "access")
+    monkeypatch.setattr(init_module, "load_refresh_token", lambda settings: None)
+
+    assert init_module.init_access_token(settings, CONFIG) is True

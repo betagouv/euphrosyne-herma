@@ -1,22 +1,39 @@
-import base64
-import json
 import subprocess
-from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl
 
 import pytest
 
 from data_upload import cli as cli_module
-from data_upload.euphrosyne.auth import InvalidHermaTokenError
+from data_upload.euphrosyne.auth import DeviceAuthorization, DeviceAuthorizationError
+
+AUTHORIZATION = DeviceAuthorization(
+    device_code="device-code",
+    user_code="ABCD-EFGH",
+    verification_uri="https://euphrosyne.example/identity/o/device",
+    verification_uri_complete=(
+        "https://euphrosyne.example/identity/o/device?code=ABCD-EFGH"
+    ),
+    expires_in=300,
+    interval=5,
+)
 
 
-def _refresh_jwt() -> str:
-    def encode(data: dict) -> str:
-        raw = json.dumps(data).encode()
-        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+def _fake_device_flow(
+    monkeypatch, hosts: list, result=("access-token", "refresh-token")
+):
+    """Sign in without Euphrosyne: record the host, return or raise ``result``."""
 
-    expiration = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
-    payload = {"token_type": "refresh", "exp": expiration}
-    return f"{encode({'alg': 'HS256'})}.{encode(payload)}.signature"
+    def start(host):
+        hosts.append(host)
+        return AUTHORIZATION
+
+    def wait(host, authorization):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(cli_module, "start_device_authorization", start)
+    monkeypatch.setattr(cli_module, "wait_for_device_tokens", wait)
 
 
 class FakeSettings:
@@ -97,7 +114,6 @@ def test_cli_uploads_data_and_normalizes_data_type(
     data_path.mkdir()
     settings = FakeSettings()
     calls = {
-        "prompt": [],
         "login": [],
         "saved_refresh": [],
         "service": [],
@@ -120,10 +136,6 @@ def test_cli_uploads_data_and_normalizes_data_type(
             calls["sas"].append((project_slug, run_name, data_type))
             return {"url": "https://storage.example/share", "token": "sas-token"}
 
-    def fake_login(host, raw_token):
-        calls["login"].append((host, raw_token))
-        return ("access-token", "refresh-token")
-
     def fake_save_refresh_token(saved_settings, refresh_token):
         calls["saved_refresh"].append((saved_settings, refresh_token))
 
@@ -140,12 +152,7 @@ def test_cli_uploads_data_and_normalizes_data_type(
     monkeypatch.setattr(
         "builtins.input", lambda prompt: pytest.fail("input should not be used")
     )
-    monkeypatch.setattr(
-        cli_module.getpass,
-        "getpass",
-        lambda prompt: calls["prompt"].append(prompt) or "pasted-token",
-    )
-    monkeypatch.setattr(cli_module, "login_with_herma_token", fake_login)
+    _fake_device_flow(monkeypatch, calls["login"])
     monkeypatch.setattr(cli_module, "save_refresh_token", fake_save_refresh_token)
     monkeypatch.setattr(cli_module, "is_azcopy_installed", lambda: True)
     monkeypatch.setattr(
@@ -172,8 +179,7 @@ def test_cli_uploads_data_and_normalizes_data_type(
 
     assert exit_code == 0
     assert settings.values == {"access_token": "access-token"}
-    assert calls["prompt"] == ["Herma token: "]
-    assert calls["login"] == [("https://euphrosyne.example", "pasted-token")]
+    assert calls["login"] == ["https://euphrosyne.example"]
     assert calls["saved_refresh"] == [(settings, "refresh-token")]
     assert calls["service"] == [
         ("https://tools.example", "access-token", "refresh-token")
@@ -207,13 +213,7 @@ def test_cli_accepts_environment_flag_and_uses_selected_hosts(monkeypatch, tmp_p
 
     monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
     monkeypatch.setattr(cli_module, "QSettings", lambda org, app: settings)
-    monkeypatch.setattr(cli_module.getpass, "getpass", lambda prompt: "pasted-token")
-    monkeypatch.setattr(
-        cli_module,
-        "login_with_herma_token",
-        lambda host, raw_token: login_calls.append((host, raw_token))
-        or ("access-token", "refresh-token"),
-    )
+    _fake_device_flow(monkeypatch, login_calls)
     monkeypatch.setattr(cli_module, "save_refresh_token", lambda settings, token: None)
     monkeypatch.setattr(cli_module, "is_azcopy_installed", lambda: True)
     monkeypatch.setattr(cli_module, "EuphrosyneToolsService", FakeToolsService)
@@ -242,7 +242,7 @@ def test_cli_accepts_environment_flag_and_uses_selected_hosts(monkeypatch, tmp_p
     )
 
     assert exit_code == 0
-    assert login_calls == [("https://staging.euphrosyne.example", "pasted-token")]
+    assert login_calls == ["https://staging.euphrosyne.example"]
     assert service_calls == [
         ("https://staging.tools.example", "https://staging.euphrosyne.example")
     ]
@@ -281,78 +281,50 @@ UPLOAD_ARGS = [
 ]
 
 
-def test_cli_prints_herma_token_page_before_prompting(monkeypatch, tmp_path, capsys):
+def test_cli_prints_the_code_to_confirm_on_euphrosyne(monkeypatch, tmp_path, capsys):
     data_path = tmp_path / "data"
     data_path.mkdir()
-    events = []
-
-    def fake_getpass(prompt):
-        events.append(("prompt", prompt, capsys.readouterr().err))
-        return "pasted-token"
-
-    def fake_login(host, raw_token):
-        raise InvalidHermaTokenError("This Herma token has expired.")
-
+    hosts = []
+    _fake_device_flow(
+        monkeypatch, hosts, DeviceAuthorizationError("The sign-in was denied.")
+    )
     monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
     monkeypatch.setattr(cli_module, "QSettings", lambda org, app: FakeSettings())
-    monkeypatch.setattr(cli_module.getpass, "getpass", fake_getpass)
-    monkeypatch.setattr(cli_module, "login_with_herma_token", fake_login)
 
     exit_code = cli_module.main(
         UPLOAD_ARGS
-        + [
-            "--data-path",
-            str(data_path),
-            "--environment",
-            "euphrosyne-staging",
-        ]
+        + ["--data-path", str(data_path), "--environment", "euphrosyne-staging"]
     )
 
     assert exit_code == 1
-    assert len(events) == 1
-    _, prompt, hint = events[0]
-    assert prompt == "Herma token: "
-    assert "https://staging.euphrosyne.example/accounts/token/herma/" in hint
-
-
-def test_cli_returns_error_when_herma_token_is_invalid(monkeypatch, tmp_path, capsys):
-    data_path = tmp_path / "data"
-    data_path.mkdir()
-    settings = FakeSettings()
-    saved = []
-
-    def fake_login(host, raw_token):
-        raise InvalidHermaTokenError("Euphrosyne rejected this Herma token.")
-
-    monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
-    monkeypatch.setattr(cli_module, "QSettings", lambda org, app: settings)
-    monkeypatch.setattr(cli_module.getpass, "getpass", lambda prompt: "bad-token")
-    monkeypatch.setattr(cli_module, "login_with_herma_token", fake_login)
-    monkeypatch.setattr(
-        cli_module, "save_refresh_token", lambda s, token: saved.append(token)
-    )
-
-    exit_code = cli_module.main(UPLOAD_ARGS + ["--data-path", str(data_path)])
-
-    assert exit_code == 1
+    assert hosts == ["https://staging.euphrosyne.example"]
     err = capsys.readouterr().err
-    assert "Login failed" in err
-    assert "Euphrosyne rejected this Herma token." in err
-    assert "bad-token" not in err
-    assert settings.values == {}
-    assert saved == []
+    assert "ABCD-EFGH" in err
+    assert AUTHORIZATION.verification_uri_complete in err
+    assert "Error: The sign-in was denied." in err
 
 
-def test_cli_logs_in_with_herma_token(monkeypatch, tmp_path, httpx_mock):
+def test_cli_signs_in_with_the_device_flow(monkeypatch, tmp_path, httpx_mock):
     data_path = tmp_path / "data"
     data_path.mkdir()
     settings = FakeSettings()
     saved = []
-    herma_token = _refresh_jwt()
     httpx_mock.add_response(
         method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        json={"access": "access-token"},
+        url="https://euphrosyne.example/identity/o/api/device/code",
+        json={
+            "device_code": "device-code",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": AUTHORIZATION.verification_uri,
+            "verification_uri_complete": AUTHORIZATION.verification_uri_complete,
+            "expires_in": 300,
+            "interval": 5,
+        },
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url="https://euphrosyne.example/identity/o/api/token",
+        json={"access_token": "access-token", "refresh_token": "refresh-token"},
     )
 
     class FakeToolsService:
@@ -369,7 +341,7 @@ def test_cli_logs_in_with_herma_token(monkeypatch, tmp_path, httpx_mock):
 
     monkeypatch.setattr(cli_module, "load_config", lambda: CONFIG_CATALOG)
     monkeypatch.setattr(cli_module, "QSettings", lambda org, app: settings)
-    monkeypatch.setattr(cli_module.getpass, "getpass", lambda prompt: herma_token)
+    monkeypatch.setattr("data_upload.euphrosyne.auth.time.sleep", lambda _: None)
     monkeypatch.setattr(
         cli_module, "save_refresh_token", lambda s, token: saved.append(token)
     )
@@ -387,13 +359,12 @@ def test_cli_logs_in_with_herma_token(monkeypatch, tmp_path, httpx_mock):
     exit_code = cli_module.main(UPLOAD_ARGS + ["--data-path", str(data_path)])
 
     assert exit_code == 0
-    requests = httpx_mock.get_requests()
-    assert [str(request.url) for request in requests] == [
-        "https://euphrosyne.example/api/auth/token/refresh/"
-    ]
-    assert json.loads(requests[0].content) == {"refresh": herma_token}
+    token_request = httpx_mock.get_requests()[1]
+    assert dict(parse_qsl(token_request.content.decode()))["device_code"] == (
+        "device-code"
+    )
     assert settings.values == {"access_token": "access-token"}
-    assert saved == [herma_token]
+    assert saved == ["refresh-token"]
 
 
 def test_cli_has_no_token_argument(monkeypatch):

@@ -1,6 +1,9 @@
 import base64
 import binascii
 import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
@@ -10,7 +13,14 @@ from PySide6.QtCore import QSettings
 
 KEYRING_SERVICE = "Euphrosyne Herma"
 KEYRING_REFRESH_TOKEN_ACCOUNT = "refresh_token"
-HERMA_TOKEN_PATH = "/accounts/token/herma/"
+
+# Herma signs in with Euphrosyne's OpenID Connect provider (OAuth 2.0 device
+# authorization grant, RFC 8628), as the public client "herma".
+HERMA_CLIENT_ID = "herma"
+HERMA_SCOPE = "openid tools"
+DEVICE_CODE_PATH = "/identity/o/api/device/code"
+TOKEN_PATH = "/identity/o/api/token"
+DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 
 class EuphrosyneConnectionError(Exception):
@@ -26,8 +36,27 @@ class EuphrosyneAuthenticationError(Exception):
     """Raised when the user must authenticate again."""
 
 
-class InvalidHermaTokenError(EuphrosyneAuthenticationError):
-    """Raised when a pasted Herma token is malformed, expired or rejected."""
+class DeviceAuthorizationError(EuphrosyneAuthenticationError):
+    """The sign-in on Euphrosyne was denied, expired or failed."""
+
+
+class AuthorizationPending(Exception):
+    """The user has not approved the device on Euphrosyne yet."""
+
+    def __init__(self, slow_down: bool = False):
+        super().__init__("Waiting for approval on Euphrosyne.")
+        # The server asks to poll less often.
+        self.slow_down = slow_down
+
+
+@dataclass(frozen=True)
+class DeviceAuthorization:
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    expires_in: int
+    interval: int
 
 
 def _capture_keyring_warning(operation: str, error: Exception):
@@ -116,114 +145,151 @@ def is_token_expired(token: str) -> bool:
     return expiration < datetime.now(timezone.utc).timestamp()
 
 
-def get_herma_token_url(host: str) -> str:
-    """Return the Euphrosyne page where users generate a Herma token."""
-    return f"{host.rstrip('/')}{HERMA_TOKEN_PATH}"
-
-
-def normalize_herma_token(raw_token: str) -> str:
-    """
-    Clean up a pasted Herma token and check it looks like a valid refresh token.
-
-    Whitespace (including line breaks introduced when copying) and surrounding
-    quotes are removed.
-
-    Raises:
-        InvalidHermaTokenError: If the token is malformed, not a refresh token
-            or expired.
-    """
-    token = "".join((raw_token or "").split()).strip("\"'")
-    if not token:
-        raise InvalidHermaTokenError("Please paste a Herma token.")
+def _post_form(url: str, data: dict) -> httpx.Response:
     try:
-        payload = decode_jwt_payload(token)
-        expired = is_token_expired(token)
-    except (ValueError, TypeError) as e:
-        raise InvalidHermaTokenError(
-            "This does not look like a Herma token. "
-            "Copy the whole token generated on Euphrosyne and try again."
-        ) from e
-    token_type = payload.get("token_type")
-    if token_type is not None and token_type != "refresh":
-        raise InvalidHermaTokenError(
-            "This token cannot be used to log in to Herma. "
-            "Generate a Herma token on Euphrosyne and paste it."
-        )
-    if expired:
-        raise InvalidHermaTokenError(
-            "This Herma token has expired. Generate a new one on Euphrosyne."
-        )
-    return token
-
-
-def login_with_herma_token(host: str, raw_token: str) -> tuple[str, str]:
-    """
-    Log in with a Herma token (a refresh token generated on Euphrosyne).
-
-    Args:
-        host (str): The base URL of the authentication server.
-        raw_token (str): The token as pasted by the user.
-    Returns:
-        tuple[str, str]: The access token and the refresh token to store.
-    Raises:
-        InvalidHermaTokenError: If the token is malformed, expired or rejected.
-        EuphrosyneConnectionError: If the server cannot be reached.
-    """
-    token = normalize_herma_token(raw_token)
-    try:
-        response = httpx.post(
-            f"{host}/api/auth/token/refresh/",
-            json={"refresh": token},
-        )
+        return httpx.post(url, data=data)
     except httpx.HTTPError as e:
         raise EuphrosyneConnectionError() from e
-    if response.status_code != 200:
-        raise InvalidHermaTokenError(
-            "Euphrosyne rejected this Herma token. It may be invalid, revoked "
-            "or for another environment. Generate a new one and try again."
-        )
+
+
+def _json_object(response: httpx.Response) -> dict:
     try:
         data = response.json()
-    except ValueError as e:
-        raise InvalidHermaTokenError(
-            "Authentication server returned an invalid response."
-        ) from e
-    access_token = data.get("access") if isinstance(data, dict) else None
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _tokens_from(data: dict, error: type[Exception]) -> tuple[str, str]:
+    access_token = data.get("access_token")
+    new_refresh_token = data.get("refresh_token")
     if not isinstance(access_token, str) or not access_token:
-        raise InvalidHermaTokenError(
-            "Authentication server did not return an access token."
-        )
-    # Keep a rotated refresh token if the server returns one.
-    new_refresh_token = data.get("refresh")
+        raise error("Authentication server did not return an access token.")
     if not isinstance(new_refresh_token, str) or not new_refresh_token:
-        new_refresh_token = token
+        raise error("Authentication server did not return a refresh token.")
     return access_token, new_refresh_token
 
 
-def refresh_token(host: str, refresh_token: str) -> tuple[str, str]:
+def start_device_authorization(host: str) -> DeviceAuthorization:
     """
-    Refresh the access token using the provided refresh token.
-
-    Args:
-        refresh_token (str): The refresh token to use for obtaining a new access token.
-
-    Returns:
-        tuple[str, str]: The new access and refresh tokens.
+    Ask Euphrosyne for a code that the user approves on its sign-in page.
 
     Raises:
-        ValueError: If the refresh fails.
+        DeviceAuthorizationError: If Euphrosyne refuses the request.
+        EuphrosyneConnectionError: If the server cannot be reached.
     """
+    response = _post_form(
+        f"{host.rstrip('/')}{DEVICE_CODE_PATH}",
+        {"client_id": HERMA_CLIENT_ID, "scope": HERMA_SCOPE},
+    )
+    data = _json_object(response)
     try:
-        response = httpx.post(
-            f"{host}/api/auth/token/refresh/",
-            json={"refresh": refresh_token},
+        if response.status_code != 200:
+            raise ValueError(f"status {response.status_code}")
+        return DeviceAuthorization(
+            device_code=data["device_code"],
+            user_code=data["user_code"],
+            verification_uri=data["verification_uri"],
+            verification_uri_complete=data.get(
+                "verification_uri_complete", data["verification_uri"]
+            ),
+            expires_in=int(data.get("expires_in", 300)),
+            interval=int(data.get("interval", 5)),
         )
-    except httpx.HTTPError as e:
-        raise EuphrosyneConnectionError() from e
-    if not response.status_code == 200:
+    except (KeyError, TypeError, ValueError) as e:
+        raise DeviceAuthorizationError(
+            "Euphrosyne could not start the sign-in. Please try again later."
+        ) from e
+
+
+def poll_device_token(host: str, device_code: str) -> tuple[str, str]:
+    """
+    Ask Euphrosyne once whether the user approved the device.
+
+    Returns:
+        tuple[str, str]: The access token and the refresh token.
+
+    Raises:
+        AuthorizationPending: If the user has not answered yet.
+        DeviceAuthorizationError: If the sign-in was denied or expired.
+        EuphrosyneConnectionError: If the server cannot be reached.
+    """
+    response = _post_form(
+        f"{host.rstrip('/')}{TOKEN_PATH}",
+        {
+            "grant_type": DEVICE_CODE_GRANT,
+            "device_code": device_code,
+            "client_id": HERMA_CLIENT_ID,
+        },
+    )
+    data = _json_object(response)
+    if response.status_code == 200:
+        return _tokens_from(data, DeviceAuthorizationError)
+    error = data.get("error")
+    if error == "authorization_pending":
+        raise AuthorizationPending()
+    if error == "slow_down":
+        raise AuthorizationPending(slow_down=True)
+    if error == "access_denied":
+        raise DeviceAuthorizationError("The sign-in was denied on Euphrosyne.")
+    if error == "expired_token":
+        raise DeviceAuthorizationError("The sign-in code expired. Please try again.")
+    raise DeviceAuthorizationError("Euphrosyne refused the sign-in. Please try again.")
+
+
+def wait_for_device_tokens(
+    host: str,
+    authorization: DeviceAuthorization,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[str, str]:
+    """Poll Euphrosyne until the user approves or denies the device."""
+    interval = authorization.interval
+    deadline = time.monotonic() + authorization.expires_in
+    while True:
+        sleep(interval)
+        try:
+            return poll_device_token(host, authorization.device_code)
+        except AuthorizationPending as pending:
+            if pending.slow_down:
+                interval += 5
+        if time.monotonic() > deadline:
+            raise DeviceAuthorizationError(
+                "The sign-in code expired. Please try again."
+            )
+
+
+def refresh_tokens(host: str, refresh_token: str) -> tuple[str, str] | None:
+    """
+    Get a new access token with the refresh token.
+
+    Euphrosyne rotates refresh tokens: the returned one replaces the given one,
+    which no longer works.
+
+    Returns:
+        tuple[str, str] | None: The new access and refresh tokens, or None if
+            the user must sign in again.
+
+    Raises:
+        EuphrosyneConnectionError: If the server cannot be reached.
+    """
+    response = _post_form(
+        f"{host.rstrip('/')}{TOKEN_PATH}",
+        _refresh_form(refresh_token),
+    )
+    if response.status_code != 200:
         return None
-    data = response.json()
-    return data["access"]
+    try:
+        return _tokens_from(_json_object(response), EuphrosyneAuthenticationError)
+    except EuphrosyneAuthenticationError:
+        return None
+
+
+def _refresh_form(refresh_token: str) -> dict:
+    return {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": HERMA_CLIENT_ID,
+    }
 
 
 class EuphrosyneAuth(httpx.Auth):
@@ -254,13 +320,13 @@ class EuphrosyneAuth(httpx.Auth):
         # Return an `httpx.Request` for refreshing tokens.
         return httpx.Request(
             "POST",
-            f"{self.host}/api/auth/token/refresh/",
-            json={"refresh": self.refresh_token},
+            f"{self.host.rstrip('/')}{TOKEN_PATH}",
+            data=_refresh_form(self.refresh_token),
         )
 
     def update_tokens(self, response):
-        # Update the `.access_token` and `.refresh_token` tokens
-        # based on a refresh response.
+        # Update the access and refresh tokens from a refresh response. The
+        # refresh token is rotated: keep the new one, the old one is revoked.
         if response.status_code != 200:
             raise EuphrosyneAuthenticationError("Session expired. Please log in again.")
 
@@ -270,12 +336,13 @@ class EuphrosyneAuth(httpx.Auth):
             raise EuphrosyneAuthenticationError(
                 "Authentication server returned an invalid response."
             ) from e
-
-        access_token = data.get("access")
-        if not isinstance(access_token, str) or not access_token:
+        if not isinstance(data, dict):
             raise EuphrosyneAuthenticationError(
-                "Authentication server did not return an access token."
+                "Authentication server returned an invalid response."
             )
 
-        self.access_token = access_token
+        self.access_token, self.refresh_token = _tokens_from(
+            data, EuphrosyneAuthenticationError
+        )
         self.settings.setValue("access_token", self.access_token)
+        save_refresh_token(self.settings, self.refresh_token)

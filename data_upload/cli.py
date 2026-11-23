@@ -1,5 +1,4 @@
 import argparse
-import getpass
 import logging
 import subprocess
 import sys
@@ -24,10 +23,9 @@ from data_upload.euphrosyne.auth import (
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
-    InvalidHermaTokenError,
-    get_herma_token_url,
-    login_with_herma_token,
     save_refresh_token,
+    start_device_authorization,
+    wait_for_device_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,21 +78,13 @@ def _validate_data_path(data_path: str) -> Path:
 
 def _login(config, settings: QSettings) -> tuple[str, str]:
     host = config["euphrosyne"]["url"]
-    # The token is only read from a hidden prompt, never from the command line,
-    # so that it does not end up in the shell history or the process list.
+    authorization = start_device_authorization(host)
     print(
-        "Generate a Herma token on Euphrosyne, copy it and "
-        f"paste it below: {get_herma_token_url(host)}",
+        "Sign in to Euphrosyne and confirm the code "
+        f"{authorization.user_code} at: {authorization.verification_uri_complete}",
         file=sys.stderr,
     )
-    raw_token = getpass.getpass("Herma token: ")
-
-    try:
-        access_token, refresh_token = login_with_herma_token(
-            host=host, raw_token=raw_token
-        )
-    except InvalidHermaTokenError as error:
-        raise EuphrosyneAuthenticationError(f"Login failed. {error}") from error
+    access_token, refresh_token = wait_for_device_tokens(host, authorization)
 
     settings.setValue("access_token", access_token)
     save_refresh_token(settings, refresh_token)

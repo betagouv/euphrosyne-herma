@@ -2,10 +2,6 @@ import pytest
 
 from data_upload.app import login as login_module
 from data_upload.config import resolve_config
-from data_upload.euphrosyne.auth import (
-    EuphrosyneConnectionError,
-    InvalidHermaTokenError,
-)
 
 CONFIG = {
     "default-environment": "euphrosyne",
@@ -37,40 +33,30 @@ class FakeSettings:
 
 
 class FakeLoginDialog:
-    """Replays scripted dialog submissions and records constructor arguments."""
+    """Replays a scripted sign-in result and records constructor arguments."""
 
-    submissions: list = []
+    results: list = []
     instances: list = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        self.submission = self.submissions.pop(0)
+        self.result = self.results.pop(0)
         FakeLoginDialog.instances.append(self)
 
     def exec(self):
-        return self.submission is not None
+        return self.result is not None
 
-    def get_token_login_data(self):
-        return self.submission["environment"], self.submission["token"]
-
-
-class FakeMessageBox:
-    messages: list = []
-
-    @classmethod
-    def critical(cls, parent, title, message):
-        cls.messages.append((title, message))
+    def get_login_result(self):
+        return self.result
 
 
 @pytest.fixture
 def fakes(monkeypatch):
     monkeypatch.delenv("EUPHROSYNE_URL", raising=False)
-    FakeLoginDialog.submissions = []
+    FakeLoginDialog.results = []
     FakeLoginDialog.instances = []
-    FakeMessageBox.messages = []
     saved_refresh_tokens = []
     monkeypatch.setattr(login_module, "LoginDialog", FakeLoginDialog)
-    monkeypatch.setattr(login_module, "QMessageBox", FakeMessageBox)
     monkeypatch.setattr(
         login_module,
         "save_refresh_token",
@@ -79,73 +65,29 @@ def fakes(monkeypatch):
     return saved_refresh_tokens
 
 
-def _token_submission(environment="euphrosyne", token="pasted-token"):
-    return {"environment": environment, "token": token}
-
-
-def test_login_user_with_herma_token_stores_tokens(monkeypatch, fakes):
-    FakeLoginDialog.submissions = [_token_submission(environment="euphrosyne-staging")]
-    calls = []
-
-    def fake_login_with_herma_token(host, raw_token):
-        calls.append((host, raw_token))
-        return "access", "pasted-token"
-
-    monkeypatch.setattr(
-        login_module, "login_with_herma_token", fake_login_with_herma_token
-    )
+def test_login_user_stores_tokens_of_the_signed_in_environment(fakes):
+    FakeLoginDialog.results = [("euphrosyne-staging", "access", "refresh")]
     settings = FakeSettings()
 
     config = login_module.login_user(
         CONFIG, resolve_config(CONFIG, "euphrosyne"), settings
     )
 
-    assert calls == [("https://staging.euphrosyne.example", "pasted-token")]
     assert config["environment"] == "euphrosyne-staging"
     assert settings.values == {
         "access_token": "access",
         "environment": "euphrosyne-staging",
     }
-    assert fakes == ["pasted-token"]
-    assert FakeMessageBox.messages == []
-
-
-def test_login_user_retries_after_invalid_token(monkeypatch, fakes):
-    FakeLoginDialog.submissions = [
-        _token_submission(token="bad-token"),
-        _token_submission(token="good-token"),
-    ]
-
-    def fake_login_with_herma_token(host, raw_token):
-        if raw_token == "bad-token":
-            raise InvalidHermaTokenError("This Herma token has expired.")
-        return "access", raw_token
-
-    monkeypatch.setattr(
-        login_module, "login_with_herma_token", fake_login_with_herma_token
-    )
-    settings = FakeSettings()
-
-    login_module.login_user(CONFIG, resolve_config(CONFIG, "euphrosyne"), settings)
-
-    assert FakeMessageBox.messages == [
-        ("Invalid Herma token", "This Herma token has expired.")
-    ]
-    assert FakeLoginDialog.instances[1].kwargs == {
+    assert fakes == ["refresh"]
+    assert FakeLoginDialog.instances[0].kwargs == {
         "config": CONFIG,
         "selected_environment": "euphrosyne",
         "allow_environment_change": True,
     }
-    assert fakes == ["good-token"]
 
 
-def test_login_user_reports_connection_errors(monkeypatch, fakes):
-    FakeLoginDialog.submissions = [_token_submission(), None]
-
-    def fail(host, raw_token):
-        raise EuphrosyneConnectionError()
-
-    monkeypatch.setattr(login_module, "login_with_herma_token", fail)
+def test_login_user_exits_when_the_dialog_is_cancelled(fakes):
+    FakeLoginDialog.results = [None]
 
     with pytest.raises(SystemExit) as exit_info:
         login_module.login_user(
@@ -153,17 +95,11 @@ def test_login_user_reports_connection_errors(monkeypatch, fakes):
         )
 
     assert exit_info.value.code == 0
-    assert [title for title, _ in FakeMessageBox.messages] == ["Connection Error"]
     assert fakes == []
 
 
-def test_login_user_keeps_environment_locked_during_relogin(monkeypatch, fakes):
-    FakeLoginDialog.submissions = [_token_submission(environment="euphrosyne-staging")]
-    monkeypatch.setattr(
-        login_module,
-        "login_with_herma_token",
-        lambda host, raw_token: ("access", raw_token),
-    )
+def test_login_user_keeps_environment_locked_during_relogin(fakes):
+    FakeLoginDialog.results = [("euphrosyne-staging", "access", "refresh")]
 
     login_module.login_user(
         CONFIG,

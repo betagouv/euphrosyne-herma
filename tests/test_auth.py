@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl
 
 import httpx
 import pytest
@@ -8,18 +9,20 @@ import pytest
 from data_upload.euphrosyne.auth import (
     KEYRING_REFRESH_TOKEN_ACCOUNT,
     KEYRING_SERVICE,
+    AuthorizationPending,
+    DeviceAuthorization,
+    DeviceAuthorizationError,
     EuphrosyneAuth,
     EuphrosyneAuthenticationError,
     EuphrosyneConnectionError,
-    InvalidHermaTokenError,
     clear_tokens,
-    get_herma_token_url,
     is_token_expired,
     load_refresh_token,
-    login_with_herma_token,
-    normalize_herma_token,
-    refresh_token,
+    poll_device_token,
+    refresh_tokens,
     save_refresh_token,
+    start_device_authorization,
+    wait_for_device_tokens,
 )
 
 
@@ -92,6 +95,39 @@ def test_is_token_expired_rejects_malformed_token(token):
         is_token_expired(token)
 
 
+HOST = "https://euphrosyne.example"
+TOKEN_URL = f"{HOST}/identity/o/api/token"
+DEVICE_CODE_URL = f"{HOST}/identity/o/api/device/code"
+DEVICE_RESPONSE = {
+    "device_code": "device-code",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": f"{HOST}/identity/o/device",
+    "verification_uri_complete": f"{HOST}/identity/o/device?code=ABCD-EFGH",
+    "expires_in": 300,
+    "interval": 5,
+}
+TOKEN_RESPONSE = {
+    "access_token": "access-token",
+    "refresh_token": "new-refresh-token",
+    "token_type": "Bearer",
+    "expires_in": 300,
+}
+
+
+def _form(request: httpx.Request) -> dict:
+    return dict(parse_qsl(request.content.decode()))
+
+
+@pytest.fixture(name="saved_refresh_tokens")
+def saved_refresh_tokens_fixture(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        "data_upload.euphrosyne.auth.save_refresh_token",
+        lambda settings, token: saved.append(token),
+    )
+    return saved
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -104,189 +140,158 @@ def test_auth_network_calls_wrap_http_errors(httpx_mock, error):
     httpx_mock.add_exception(error, is_reusable=True)
 
     with pytest.raises(EuphrosyneConnectionError):
-        refresh_token("https://euphrosyne.example", "refresh-token")
+        refresh_tokens(HOST, "refresh-token")
     with pytest.raises(EuphrosyneConnectionError):
-        login_with_herma_token("https://euphrosyne.example", _refresh_jwt())
+        start_device_authorization(HOST)
+    with pytest.raises(EuphrosyneConnectionError):
+        poll_device_token(HOST, "device-code")
 
 
-def test_get_herma_token_url():
-    assert (
-        get_herma_token_url("https://euphrosyne.example/")
-        == "https://euphrosyne.example/accounts/token/herma/"
+def test_start_device_authorization_asks_for_a_herma_code(httpx_mock):
+    httpx_mock.add_response(method="POST", url=DEVICE_CODE_URL, json=DEVICE_RESPONSE)
+
+    authorization = start_device_authorization(f"{HOST}/")
+
+    assert authorization == DeviceAuthorization(
+        device_code="device-code",
+        user_code="ABCD-EFGH",
+        verification_uri=f"{HOST}/identity/o/device",
+        verification_uri_complete=f"{HOST}/identity/o/device?code=ABCD-EFGH",
+        expires_in=300,
+        interval=5,
     )
-    assert (
-        get_herma_token_url("https://euphrosyne.example")
-        == "https://euphrosyne.example/accounts/token/herma/"
-    )
-
-
-def _refresh_jwt(**overrides) -> str:
-    payload = {
-        "token_type": "refresh",
-        "exp": (datetime.now(timezone.utc) + timedelta(days=30)).timestamp(),
-        "jti": "abc",
-        "user_id": 1,
+    assert _form(httpx_mock.get_request()) == {
+        "client_id": "herma",
+        "scope": "openid tools",
     }
-    payload.update(overrides)
-    return _jwt_with_payload(payload)
-
-
-def test_normalize_herma_token_trims_whitespace_and_quotes():
-    token = _refresh_jwt()
-    pasted = f'  "{token[:20]}\n{token[20:]}"\n'
-
-    assert normalize_herma_token(pasted) == token
-
-
-@pytest.mark.parametrize("raw", ["", "   ", "not-a-token", "a.b", "a.!!!.c"])
-def test_normalize_herma_token_rejects_malformed_input(raw):
-    with pytest.raises(InvalidHermaTokenError):
-        normalize_herma_token(raw)
-
-
-def test_normalize_herma_token_rejects_expired_token():
-    token = _refresh_jwt(
-        exp=(datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
-    )
-
-    with pytest.raises(InvalidHermaTokenError, match="expired"):
-        normalize_herma_token(token)
-
-
-def test_normalize_herma_token_rejects_access_token():
-    with pytest.raises(InvalidHermaTokenError):
-        normalize_herma_token(_refresh_jwt(token_type="access"))
-
-
-def test_login_with_herma_token_returns_access_and_pasted_refresh(httpx_mock):
-    token = _refresh_jwt()
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        json={"access": "new-access-token"},
-    )
-
-    tokens = login_with_herma_token("https://euphrosyne.example", f" {token}\n")
-
-    assert tokens == ("new-access-token", token)
-    request = httpx_mock.get_request()
-    assert json.loads(request.content) == {"refresh": token}
-
-
-def test_login_with_herma_token_keeps_rotated_refresh_token(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        json={"access": "new-access-token", "refresh": "rotated-refresh-token"},
-    )
-
-    assert login_with_herma_token("https://euphrosyne.example", _refresh_jwt()) == (
-        "new-access-token",
-        "rotated-refresh-token",
-    )
-
-
-def test_login_with_herma_token_does_not_call_server_for_invalid_token(httpx_mock):
-    with pytest.raises(InvalidHermaTokenError):
-        login_with_herma_token("https://euphrosyne.example", "garbage")
-
-    assert httpx_mock.get_requests() == []
 
 
 @pytest.mark.parametrize(
     "response_kwargs",
     [
-        {"status_code": 401, "json": {"detail": "Token is blacklisted"}},
-        {"status_code": 400, "text": "bad request"},
-        {"status_code": 500, "text": "oops"},
+        {"status_code": 400, "json": {"error": "invalid_client"}},
+        {"status_code": 200, "json": {"user_code": "ABCD"}},
         {"status_code": 200, "text": "not json"},
-        {"status_code": 200, "json": {"detail": "no access"}},
     ],
 )
-def test_login_with_herma_token_raises_on_rejected_token(httpx_mock, response_kwargs):
+def test_start_device_authorization_raises_when_refused(httpx_mock, response_kwargs):
+    httpx_mock.add_response(method="POST", url=DEVICE_CODE_URL, **response_kwargs)
+
+    with pytest.raises(DeviceAuthorizationError):
+        start_device_authorization(HOST)
+
+
+def test_poll_device_token_returns_tokens_once_approved(httpx_mock):
+    httpx_mock.add_response(method="POST", url=TOKEN_URL, json=TOKEN_RESPONSE)
+
+    assert poll_device_token(HOST, "device-code") == (
+        "access-token",
+        "new-refresh-token",
+    )
+    assert _form(httpx_mock.get_request()) == {
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        "device_code": "device-code",
+        "client_id": "herma",
+    }
+
+
+@pytest.mark.parametrize(
+    "error, slow_down", [("authorization_pending", False), ("slow_down", True)]
+)
+def test_poll_device_token_raises_pending(httpx_mock, error, slow_down):
     httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        **response_kwargs,
+        method="POST", url=TOKEN_URL, status_code=400, json={"error": error}
     )
 
-    with pytest.raises(InvalidHermaTokenError):
-        login_with_herma_token("https://euphrosyne.example", _refresh_jwt())
+    with pytest.raises(AuthorizationPending) as pending:
+        poll_device_token(HOST, "device-code")
+
+    assert pending.value.slow_down is slow_down
 
 
-def test_login_with_herma_token_wraps_connection_errors(httpx_mock):
-    httpx_mock.add_exception(
-        httpx.ConnectError("connection failed"),
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
+@pytest.mark.parametrize(
+    "response_kwargs, message",
+    [
+        ({"status_code": 400, "json": {"error": "access_denied"}}, "denied"),
+        ({"status_code": 400, "json": {"error": "expired_token"}}, "expired"),
+        ({"status_code": 400, "json": {"error": "invalid_client"}}, "refused"),
+        ({"status_code": 500, "text": "error"}, "refused"),
+        ({"status_code": 200, "json": {"access_token": "a"}}, "refresh token"),
+    ],
+)
+def test_poll_device_token_raises_on_failure(httpx_mock, response_kwargs, message):
+    httpx_mock.add_response(method="POST", url=TOKEN_URL, **response_kwargs)
+
+    with pytest.raises(DeviceAuthorizationError, match=message):
+        poll_device_token(HOST, "device-code")
+
+
+def test_wait_for_device_tokens_polls_until_approved(httpx_mock):
+    for error in ("authorization_pending", "slow_down"):
+        httpx_mock.add_response(
+            method="POST", url=TOKEN_URL, status_code=400, json={"error": error}
+        )
+    httpx_mock.add_response(method="POST", url=TOKEN_URL, json=TOKEN_RESPONSE)
+    sleeps = []
+
+    tokens = wait_for_device_tokens(
+        HOST,
+        DeviceAuthorization(**DEVICE_RESPONSE),
+        sleep=sleeps.append,
     )
 
-    with pytest.raises(EuphrosyneConnectionError):
-        login_with_herma_token("https://euphrosyne.example", _refresh_jwt())
+    assert tokens == ("access-token", "new-refresh-token")
+    # The interval grows by five seconds after "slow_down".
+    assert sleeps == [5, 5, 10]
 
 
-def test_herma_token_errors_never_contain_the_token(httpx_mock):
-    token = _refresh_jwt(
-        exp=(datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
-    )
-    with pytest.raises(InvalidHermaTokenError) as error_info:
-        login_with_herma_token("https://euphrosyne.example", token)
-    assert token not in str(error_info.value)
-
+def test_wait_for_device_tokens_stops_when_denied(httpx_mock):
     httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        status_code=401,
-        json={"detail": "Token is invalid"},
-    )
-    valid_token = _refresh_jwt()
-    with pytest.raises(InvalidHermaTokenError) as error_info:
-        login_with_herma_token("https://euphrosyne.example", valid_token)
-    assert valid_token not in str(error_info.value)
-
-
-def test_refresh_token_returns_new_access_token(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        json={"access": "new-access-token"},
+        method="POST", url=TOKEN_URL, status_code=400, json={"error": "access_denied"}
     )
 
-    token = refresh_token("https://euphrosyne.example", "refresh-token")
+    with pytest.raises(DeviceAuthorizationError, match="denied"):
+        wait_for_device_tokens(
+            HOST, DeviceAuthorization(**DEVICE_RESPONSE), sleep=lambda _: None
+        )
 
-    assert token == "new-access-token"
-    request = httpx_mock.get_request()
-    assert json.loads(request.content) == {"refresh": "refresh-token"}
 
+def test_refresh_tokens_returns_rotated_tokens(httpx_mock):
+    httpx_mock.add_response(method="POST", url=TOKEN_URL, json=TOKEN_RESPONSE)
 
-def test_refresh_token_returns_none_on_refresh_failure(httpx_mock):
-    httpx_mock.add_response(
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-        status_code=401,
-        json={"detail": "token_not_valid"},
+    assert refresh_tokens(HOST, "refresh-token") == (
+        "access-token",
+        "new-refresh-token",
     )
-
-    assert refresh_token("https://euphrosyne.example", "expired-refresh-token") is None
-
-
-def test_refresh_token_wraps_connection_errors(httpx_mock):
-    httpx_mock.add_exception(
-        httpx.ConnectError("connection failed"),
-        method="POST",
-        url="https://euphrosyne.example/api/auth/token/refresh/",
-    )
-
-    with pytest.raises(EuphrosyneConnectionError):
-        refresh_token("https://euphrosyne.example", "refresh-token")
+    assert _form(httpx_mock.get_request()) == {
+        "grant_type": "refresh_token",
+        "refresh_token": "refresh-token",
+        "client_id": "herma",
+    }
 
 
-def test_auth_flow_refreshes_after_unauthorized_response():
+@pytest.mark.parametrize(
+    "response_kwargs",
+    [
+        {"status_code": 400, "json": {"error": "invalid_grant"}},
+        {"status_code": 200, "json": {"access_token": "access-token"}},
+        {"status_code": 200, "text": "not json"},
+    ],
+)
+def test_refresh_tokens_returns_none_when_sign_in_is_needed(
+    httpx_mock, response_kwargs
+):
+    httpx_mock.add_response(method="POST", url=TOKEN_URL, **response_kwargs)
+
+    assert refresh_tokens(HOST, "expired-refresh-token") is None
+
+
+def test_auth_flow_refreshes_after_unauthorized_response(saved_refresh_tokens):
     settings = FakeSettings()
     auth = EuphrosyneAuth(
         access_token="old-access-token",
         refresh_token="refresh-token",
-        host="https://euphrosyne.example",
+        host=HOST,
         settings=settings,
     )
     original_request = httpx.Request("GET", "https://tools.example/data")
@@ -296,27 +301,30 @@ def test_auth_flow_refreshes_after_unauthorized_response():
     first_authorization = first_request.headers["Authorization"]
     refresh_request = flow.send(httpx.Response(401, request=first_request))
     retry_request = flow.send(
-        httpx.Response(
-            200, json={"access": "new-access-token"}, request=refresh_request
-        )
+        httpx.Response(200, json=TOKEN_RESPONSE, request=refresh_request)
     )
 
-    assert auth.access_token == "new-access-token"
-    assert settings.values == {"access_token": "new-access-token"}
     assert first_authorization == "Bearer old-access-token"
     assert refresh_request.method == "POST"
-    assert (
-        str(refresh_request.url) == "https://euphrosyne.example/api/auth/token/refresh/"
-    )
-    assert retry_request.headers["Authorization"] == "Bearer new-access-token"
+    assert str(refresh_request.url) == TOKEN_URL
+    assert _form(refresh_request) == {
+        "grant_type": "refresh_token",
+        "refresh_token": "refresh-token",
+        "client_id": "herma",
+    }
+    assert retry_request.headers["Authorization"] == "Bearer access-token"
+    # The refresh token is rotated: the new one is kept for the next refresh.
+    assert auth.refresh_token == "new-refresh-token"
+    assert settings.values == {"access_token": "access-token"}
+    assert saved_refresh_tokens == ["new-refresh-token"]
 
 
-def test_auth_flow_raises_when_refresh_response_fails():
+def test_auth_flow_raises_when_refresh_response_fails(saved_refresh_tokens):
     settings = FakeSettings()
     auth = EuphrosyneAuth(
         access_token="old-access-token",
         refresh_token="refresh-token",
-        host="https://euphrosyne.example",
+        host=HOST,
         settings=settings,
     )
     original_request = httpx.Request("GET", "https://tools.example/data")
@@ -328,56 +336,36 @@ def test_auth_flow_raises_when_refresh_response_fails():
     with pytest.raises(EuphrosyneAuthenticationError, match="Session expired"):
         flow.send(
             httpx.Response(
-                401, json={"detail": "token_not_valid"}, request=refresh_request
+                400, json={"error": "invalid_grant"}, request=refresh_request
             )
         )
 
     assert auth.access_token == "old-access-token"
     assert settings.values == {}
-
-
-def test_update_tokens_stores_new_access_token():
-    settings = FakeSettings()
-    auth = EuphrosyneAuth(
-        access_token="old-access-token",
-        refresh_token="refresh-token",
-        host="https://euphrosyne.example",
-        settings=settings,
-    )
-
-    auth.update_tokens(httpx.Response(200, json={"access": "new-access-token"}))
-
-    assert auth.access_token == "new-access-token"
-    assert settings.values == {"access_token": "new-access-token"}
+    assert saved_refresh_tokens == []
 
 
 @pytest.mark.parametrize(
     "response, message",
     [
+        (httpx.Response(400, json={"error": "invalid_grant"}), "Session expired"),
+        (httpx.Response(200, text="not json"), "invalid response"),
+        (httpx.Response(200, json=[]), "invalid response"),
+        (httpx.Response(200, json={}), "did not return an access token"),
         (
-            httpx.Response(401, json={"detail": "token_not_valid"}),
-            "Session expired",
-        ),
-        (
-            httpx.Response(200, text="not json"),
-            "invalid response",
-        ),
-        (
-            httpx.Response(200, json={}),
-            "did not return an access token",
-        ),
-        (
-            httpx.Response(200, json={"access": None}),
-            "did not return an access token",
+            httpx.Response(200, json={"access_token": "access-token"}),
+            "did not return a refresh token",
         ),
     ],
 )
-def test_update_tokens_rejects_failed_or_malformed_refresh_responses(response, message):
+def test_update_tokens_rejects_failed_or_malformed_refresh_responses(
+    response, message, saved_refresh_tokens
+):
     settings = FakeSettings()
     auth = EuphrosyneAuth(
         access_token="old-access-token",
         refresh_token="refresh-token",
-        host="https://euphrosyne.example",
+        host=HOST,
         settings=settings,
     )
 
@@ -386,6 +374,7 @@ def test_update_tokens_rejects_failed_or_malformed_refresh_responses(response, m
 
     assert auth.access_token == "old-access-token"
     assert settings.values == {}
+    assert saved_refresh_tokens == []
 
 
 def test_clear_tokens_removes_access_and_refresh_tokens():

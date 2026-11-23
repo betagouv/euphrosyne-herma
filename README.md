@@ -60,9 +60,10 @@ python -m data_upload.gui
 
 1. The application will automatically initialize AzCopy
 2. If authentication is required, a login dialog will appear
-3. Select the target environment, click "Open the Herma token page", log in on
-   Euphrosyne (administrators use two-factor authentication), generate a Herma
-   token, then copy and paste it in the dialog.
+3. Select the target environment and click "Sign in with Euphrosyne". Herma
+   shows a code and opens Euphrosyne in your browser: sign in there
+   (administrators use two-factor authentication) and confirm the code. Only lab
+   administrators can approve Herma.
 4. The main data upload interface will open
 
 ### Using the Interface
@@ -95,15 +96,21 @@ Supported data types are:
 
 `--data-path` must point to an existing local directory.
 
-The CLI prints the address of the
-Herma token page of the selected environment (`<Euphrosyne URL>/accounts/token/herma/`)
-and asks for a Herma token through a hidden prompt. Generate the token on that
-page, then paste it. The token is never accepted as a command-line argument, so
-that it does not end up in the shell history or the process list.
+The CLI prints a code and the Euphrosyne address where to confirm it, then waits
+until you sign in there and confirm the code (OAuth 2.0 device authorization
+grant). No token is typed or passed on the command line.
 
-The CLI logs in with the pasted Herma token, stores refreshed tokens using the
-same Qt settings/keyring helpers as the GUI, initializes the project/run folders,
-fetches the upload SAS token, and runs AzCopy synchronously.
+The CLI then stores the tokens using the same Qt settings/keyring helpers as the
+GUI, initializes the project/run folders, fetches the upload SAS token, and runs
+AzCopy synchronously.
+
+### Authentication
+
+Herma is the public OpenID Connect client `herma` of Euphrosyne
+(`/identity/o/api/device/code`, `/identity/o/api/token`). Access tokens last
+5 minutes. The refresh token is kept in the system keyring and replaced at each
+refresh (Euphrosyne rotates it); after a day without use, Herma asks to sign in
+again.
 
 ## Configuration
 
