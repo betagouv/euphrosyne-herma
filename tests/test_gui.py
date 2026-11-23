@@ -297,3 +297,35 @@ def test_startup_shows_warning_dialog_and_exits_when_no_runs_are_available(
     assert len(FakeMessageBox.warning_calls) == 1
     assert FakeMessageBox.warning_calls[0][1] == "No uploadable projects"
     assert FakeStartupDialog.instances[0].close_count == 1
+
+
+def test_init_sentry_disables_local_variables_and_scrubs_tokens(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        gui_module.sentry_sdk, "init", lambda **kwargs: calls.append(kwargs)
+    )
+
+    gui_module.init_sentry()
+
+    assert len(calls) == 1
+    options = calls[0]
+    assert options["include_local_variables"] is False
+    scrubber = options["event_scrubber"]
+    for key in (
+        "raw_token",
+        "new_refresh_token",
+        "access_token",
+        "refresh_token",
+        "token",
+        "password",
+        "data",
+        "payload",
+    ):
+        assert key in scrubber.denylist
+
+    event = {
+        "extra": {"context": {"raw_token": "secret-token", "safe": "kept"}},
+    }
+    scrubber.scrub_event(event)
+    assert event["extra"]["context"]["raw_token"] != "secret-token"
+    assert event["extra"]["context"]["safe"] == "kept"

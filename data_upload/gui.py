@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QVBoxLayout,
 )
+from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
 
 from data_upload.app.init import init_access_token, init_azcopy, init_projects
 from data_upload.app.login import login_user
@@ -23,6 +24,35 @@ from data_upload.widget.text_edit_stream import TextEditStream
 from data_upload.widget.theme import apply_app_theme
 
 settings = QSettings("Euphrosyne", "Herma")
+
+SENTRY_DSN = "https://3ac110bc22bfbcdc13c37d73f5be45de@sentry.incubateur.net/253"
+# Extra keys scrubbed from Sentry events, on top of the SDK defaults, so that
+# tokens never leave the machine even if they end up in event data.
+SENTRY_EXTRA_DENYLIST = [
+    "access",
+    "access_token",
+    "data",
+    "decoded",
+    "new_refresh_token",
+    "payload",
+    "raw_token",
+    "refresh",
+    "refresh_token",
+    "tokens",
+]
+
+
+def init_sentry():
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        send_default_pii=True,
+        # Stack-frame locals may hold passwords or Herma/JWT tokens.
+        include_local_variables=False,
+        event_scrubber=EventScrubber(
+            denylist=DEFAULT_DENYLIST + SENTRY_EXTRA_DENYLIST, recursive=True
+        ),
+    )
+
 
 if IS_BUNDLED:
     ICON_PATH = str(BUNDLE_DIR / "assets" / "icon.png")
@@ -153,8 +183,5 @@ class ConverterGUI:
 
 
 if __name__ == "__main__":
-    sentry_sdk.init(
-        dsn="https://3ac110bc22bfbcdc13c37d73f5be45de@sentry.incubateur.net/253",
-        send_default_pii=True,
-    )
+    init_sentry()
     ConverterGUI.start()
