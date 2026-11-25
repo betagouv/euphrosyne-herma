@@ -1,8 +1,9 @@
 import platform
+import shutil
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import httpx
 from PySide6.QtCore import QStandardPaths
@@ -101,17 +102,50 @@ def download_azcopy():
         print("AzCopy is already installed.")
 
 
+def _is_unsafe_member(name: str) -> bool:
+    normalized = name.replace("\\", "/")
+    windows_path = PureWindowsPath(name)
+    return (
+        normalized.startswith("/")
+        or windows_path.is_absolute()
+        or windows_path.drive != ""
+        or ".." in PurePosixPath(normalized).parts
+    )
+
+
 def _unzip_azcopy(zip_path: Path, bin_folder: Path):
-    """Unzip the downloaded AzCopy binary."""
+    """Extract only the AzCopy binary into ``bin_folder/azcopy/``.
+
+    Archive members with absolute paths or ``..`` components are refused, and the
+    destination is checked to stay inside ``bin_folder``.
+    """
     print(f"Unzipping AzCopy from {zip_path}...")
+    binary_name = "azcopy.exe" if _is_windows else "azcopy"
+    target_dir = bin_folder / "azcopy"
+    destination = target_dir / binary_name
+    if not destination.resolve().is_relative_to(bin_folder.resolve()):
+        raise ValueError(f"Unsafe AzCopy destination: {destination}")
+
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        first_member = zip_ref.namelist()[0]
-        zip_ref.extractall(bin_folder)
-        extracted_path = bin_folder / first_member
-        renamed_path = bin_folder / "azcopy"
-        if extracted_path.exists():
-            extracted_path.rename(renamed_path)
-    print(f"AzCopy extracted to {bin_folder}")
+        members = zip_ref.infolist()
+        for member in members:
+            if _is_unsafe_member(member.filename):
+                raise ValueError(f"Unsafe path in AzCopy archive: {member.filename}")
+        binary_member = next(
+            (
+                m
+                for m in members
+                if not m.is_dir()
+                and PurePosixPath(m.filename.replace("\\", "/")).name == binary_name
+            ),
+            None,
+        )
+        if binary_member is None:
+            raise RuntimeError(f"{binary_name} not found in AzCopy archive.")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        with zip_ref.open(binary_member) as src, open(destination, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    print(f"AzCopy extracted to {target_dir}")
     zip_path.unlink()  # Optionally remove the zip file after extraction
 
 
