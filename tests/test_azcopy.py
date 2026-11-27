@@ -1,4 +1,5 @@
 import subprocess
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -221,3 +222,64 @@ def test_download_binary_raises_http_errors(monkeypatch, tmp_path):
 
     with pytest.raises(httpx.HTTPStatusError):
         azcopy._download_binary("https://download.example/azcopy.zip", destination)
+
+
+def _make_zip(path, members):
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    return path
+
+
+@pytest.mark.parametrize(
+    "is_windows,binary_name", [(False, "azcopy"), (True, "azcopy.exe")]
+)
+def test_unzip_azcopy_extracts_only_the_binary(
+    monkeypatch, tmp_path, is_windows, binary_name
+):
+    monkeypatch.setattr(azcopy, "_is_windows", is_windows)
+    bin_folder = tmp_path / "bin"
+    bin_folder.mkdir()
+    archive = _make_zip(
+        bin_folder / "azcopy.zip",
+        {
+            "azcopy_darwin_amd64_10.0.0/": "",
+            f"azcopy_darwin_amd64_10.0.0/{binary_name}": "binary",
+            "azcopy_darwin_amd64_10.0.0/NOTICE.txt": "notice",
+        },
+    )
+
+    azcopy._unzip_azcopy(archive, bin_folder)
+
+    assert (bin_folder / "azcopy" / binary_name).read_text() == "binary"
+    assert not (bin_folder / "azcopy" / "NOTICE.txt").exists()
+    assert not archive.exists()
+
+
+@pytest.mark.parametrize(
+    "member", ["../evil", "dir/../../evil", "/etc/evil", "C:\\evil", "..\\evil"]
+)
+def test_unzip_azcopy_refuses_unsafe_members(monkeypatch, tmp_path, member):
+    monkeypatch.setattr(azcopy, "_is_windows", False)
+    bin_folder = tmp_path / "bin"
+    bin_folder.mkdir()
+    archive = _make_zip(
+        bin_folder / "azcopy.zip", {"azcopy_dir/azcopy": "binary", member: "evil"}
+    )
+
+    with pytest.raises(ValueError, match="Unsafe path"):
+        azcopy._unzip_azcopy(archive, bin_folder)
+
+    assert not (tmp_path / "evil").exists()
+    assert not (bin_folder / "azcopy").exists()
+    assert archive.exists()
+
+
+def test_unzip_azcopy_raises_when_binary_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(azcopy, "_is_windows", False)
+    bin_folder = tmp_path / "bin"
+    bin_folder.mkdir()
+    archive = _make_zip(bin_folder / "azcopy.zip", {"azcopy_dir/NOTICE.txt": "x"})
+
+    with pytest.raises(RuntimeError, match="not found"):
+        azcopy._unzip_azcopy(archive, bin_folder)
