@@ -3,3 +3,6 @@ PySide6==6.9.1
 PyYAML==6.0.2
 sentry-sdk==2.33.0
 keyring==25.6.0
+# Transitive dependencies pinned for security fixes (bundled in the PyInstaller binary)
+urllib3>=2.8.0
+certifi>=2025.11.12
